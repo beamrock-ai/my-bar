@@ -14,13 +14,15 @@ type DB = ReturnType<typeof createServiceClient>
 const HEADER = ['주종', '한글명', '영문명', '카테고리', '구매일자', '구매상점', '구매금액', '구매횟수', '최저가(시점·상점)', '평균가', '최고가(시점·상점)', '추천인', '추천이유', '사진URL', '비고']
 const LIQUOR_COL = 0 // A열(0-based) 주종
 const CATEGORY_COL = 3 // D열(0-based, 술유형 추가로 C→D 이동)
-const CATEGORY_VALUES = ['구매완료', '지인선물', '구매희망', '지인추천', '전문가추천']
+const CATEGORY_VALUES = ['구매완료', '시음', '바이알시음', '지인선물', '구매희망', '지인추천', '전문가추천', '직접촬영']
+// 구매형태: bottle=구매(완료), 그 외(glass/vial/miniature)=시음. 레거시(form=null)는 구매로 간주.
+const isBottle = (form: string | null | undefined) => (form ?? 'bottle') === 'bottle'
 const norm = (s?: string | null) => (s ?? '').trim().toLowerCase()
 
 async function buildGrid(db: DB): Promise<string[][]> {
   const [whiskies, purchases, wishlists, recos, observations] = await Promise.all([
     db.from('whisky').select('*').order('name'),
-    db.from('purchase').select('whisky_id, purchase_date, price, shop:shop_id(name)').order('purchase_date', { ascending: false }),
+    db.from('purchase').select('whisky_id, purchase_date, price, form, shop:shop_id(name)').order('purchase_date', { ascending: false }),
     db.from('wishlist').select('whisky_id'),
     db.from('recommendation').select('whisky_id, reason, recommender:recommender_id(name, kind)'),
     db.from('price_observation').select('whisky_id, price, observed_on, shop:shop_id(name)'),
@@ -32,7 +34,7 @@ async function buildGrid(db: DB): Promise<string[][]> {
   const recoData = (recos.data ?? []) as unknown as RecoR[]
   const recosOf = (id: string) => recoData.filter((r) => r.whisky_id === id)
 
-  type BuyRow = { whisky_id: string; purchase_date: string; price: number | null; shop: { name: string } | null }
+  type BuyRow = { whisky_id: string; purchase_date: string; price: number | null; form: string | null; shop: { name: string } | null }
   const buyData = (purchases.data ?? []) as unknown as BuyRow[] // 날짜 내림차순
   const buysOf = (id: string) => buyData.filter((p) => p.whisky_id === id)
 
@@ -43,14 +45,17 @@ async function buildGrid(db: DB): Promise<string[][]> {
   const grid: string[][] = [HEADER]
   for (const w of whiskies.data ?? []) {
     const buys = buysOf(w.id) // 최근순
+    const buyCnt = buys.filter((p) => isBottle(p.form)).length   // 구매(bottle)
+    const tasteCnt = buys.length - buyCnt                        // 시음(그 외)
     const recos2 = recosOf(w.id)
     const hasFriend = recos2.some((r) => r.recommender?.kind === 'friend')
     const hasExpert = recos2.some((r) => r.recommender?.kind === 'expert')
     const hasGift = recos2.some((r) => r.recommender?.kind === 'gift')
+    const hasVial = recos2.some((r) => r.recommender?.kind === 'vial')
     const hasPhoto = recos2.some((r) => r.recommender?.kind === 'photo')
 
-    // 카테고리(단일, 우선순위): 구매완료 > 지인선물 > 구매희망 > 지인추천 > 전문가추천 > 직접촬영
-    const category = buys.length ? '구매완료' : hasGift ? '지인선물' : wishOf(w.id) ? '구매희망' : hasFriend ? '지인추천' : hasExpert ? '전문가추천' : hasPhoto ? '직접촬영' : ''
+    // 카테고리(단일, 우선순위): 구매완료(bottle) > 시음(그 외 구매형태) > 바이알시음 > 지인선물 > 구매희망 > 지인추천 > 전문가추천 > 직접촬영
+    const category = buyCnt ? '구매완료' : tasteCnt ? '시음' : hasVial ? '바이알시음' : hasGift ? '지인선물' : wishOf(w.id) ? '구매희망' : hasFriend ? '지인추천' : hasExpert ? '전문가추천' : hasPhoto ? '직접촬영' : ''
 
     // 구매(최근 1건) — 분리 컬럼
     const latest = buys[0]
@@ -58,10 +63,10 @@ async function buildGrid(db: DB): Promise<string[][]> {
     const buyShop = latest?.shop?.name ?? ''
     const buyPrice = latest?.price != null ? won(latest.price) : ''
 
-    // 최저/최고가(시점·상점) = 시세(관측) + 구매가격 합산 (1건이라도 있으면 계산)
+    // 최저/최고가(시점·상점) = 시세(관측) + 구매가격. 단 구매는 bottle·price>0만(시음·free 제외 → 시세 왜곡 방지)
     const priceRecs: { price: number; when: string | null; shop?: string }[] = [
       ...obsOf(w.id).map((o) => ({ price: o.price, when: o.observed_on, shop: o.shop?.name })),
-      ...buys.filter((p) => p.price != null).map((p) => ({ price: p.price as number, when: p.purchase_date, shop: p.shop?.name })),
+      ...buys.filter((p) => p.price != null && p.price > 0 && isBottle(p.form)).map((p) => ({ price: p.price as number, when: p.purchase_date, shop: p.shop?.name })),
     ]
     let minCell = '', avgCell = '', maxCell = ''
     if (priceRecs.length) {
@@ -85,7 +90,7 @@ async function buildGrid(db: DB): Promise<string[][]> {
       buyDate,
       buyShop,
       buyPrice,
-      String(buys.length),
+      `${buyCnt}${tasteCnt ? ` · 시음 ${tasteCnt}` : ''}`,
       minCell,
       avgCell,
       maxCell,
@@ -119,7 +124,7 @@ export async function pullAdd(db: DB): Promise<number> {
     await db.from('whisky').upsert(
       {
         name: canon, name_ko: nk, name_en: ne,
-        liquor: sheetLiquor || info.liquor, style: info.style, cask: info.cask, peat: info.peat,
+        liquor: sheetLiquor || info.liquor, style: info.style, cask: info.cask, oak_species: info.oak_species, peat: info.peat, peat_ppm: info.peat_ppm, sherry_type: info.sherry_type,
         image_url: (r[13] ?? '').trim() || null,
         type: info.type, distillery: info.distillery, abv: info.abv,
         description: info.description, nose: info.nose, palate: info.palate, finish: info.finish,

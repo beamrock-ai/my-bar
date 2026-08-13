@@ -8,14 +8,16 @@ const BP = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
 // 주종(최상위 분류) / 위스키 구분(세부 스타일) / 카테고리. 서버 LIQUORS·WHISKY_STYLES와 동일(SDK 번들 방지 위해 로컬 정의)
 const LIQUORS = ['위스키', '보드카', '진', '럼', '데킬라', '브랜디', '리큐르', '사케', '막걸리', '소주', '전통주', '와인', '맥주', '기타']
 const STYLES = ['싱글몰트', '블렌디드', '블렌디드몰트', '싱글그레인', '버번', '라이', '기타']
-const CATEGORIES = ['구매완료', '지인선물', '구매희망', '지인추천', '전문가추천', '직접촬영']
+const CATEGORIES = ['구매완료', '시음', '바이알시음', '지인선물', '구매희망', '지인추천', '전문가추천', '직접촬영']
+// 구매형태: bottle=구매(완료), 그 외=시음. 레거시(null)는 구매로 간주.
+const isBottle = (form?: string | null) => (form ?? 'bottle') === 'bottle'
 
-type Whisky = { id: string; name: string; name_ko?: string | null; name_en?: string | null; image_url?: string | null; liquor?: string | null; style?: string | null; type?: string | null }
+type Whisky = { id: string; name: string; seq?: number | null; name_ko?: string | null; name_en?: string | null; image_url?: string | null; liquor?: string | null; style?: string | null; type?: string | null; updated_at?: string | null; noteCount?: number }
 type Stat = { whisky_id: string; purchase_count: number; price_min: number | null; price_max: number | null; price_avg: number | null; price_count: number }
-type Purchase = { id: string; whisky_id: string; purchase_date: string; price: number | null; shop: { name: string } | null }
+type Purchase = { id: string; whisky_id: string; purchase_date: string; price: number | null; form?: string | null; volume_ml?: number | null; shop: { name: string } | null }
 type Wishlist = { id: string; whisky_id: string; memo: string | null }
 type WishlistShop = { wishlist_id: string; shop: { name: string } | null }
-type Reco = { id: string; whisky_id: string; reason: string | null; recommender: { name: string; kind: 'friend' | 'expert' | 'gift' | 'photo' } | null }
+type Reco = { id: string; whisky_id: string; reason: string | null; recommender: { name: string; kind: 'friend' | 'expert' | 'gift' | 'photo' | 'vial' } | null }
 
 type Data = {
   whiskies: Whisky[]; stats: Stat[]; purchases: Purchase[]
@@ -23,6 +25,13 @@ type Data = {
 }
 
 const won = (n: number | null | undefined) => (n == null ? '-' : `${n.toLocaleString()}원`)
+// 변경시각 KST 표시 (MM-DD HH:mm)
+const kst = (iso?: string | null) => {
+  if (!iso) return ''
+  const p = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(iso))
+  const g = (t: string) => p.find(x => x.type === t)?.value ?? ''
+  return `${g('month')}-${g('day')} ${g('hour')}:${g('minute')}`
+}
 
 export default function WhiskyPage() {
   const [data, setData] = useState<Data | null>(null)
@@ -31,13 +40,15 @@ export default function WhiskyPage() {
   const [style, setStyle] = useState('') // 등록 시 구분 지정('' = AI 자동)
   const [cat, setCat] = useState('') // 등록 시 카테고리('' = 미지정 / buy / wish / friend / expert)
   const [catForm, setCatForm] = useState<Record<string, string>>({}) // 카테고리 세부입력
-  const [catalog, setCatalog] = useState<{ name: string; liquor: string; style: string; cask: string; peat: string; priceMin: number | null }[]>([])
+  const [catalog, setCatalog] = useState<{ name: string; liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; priceMin: number | null }[]>([])
   const [price, setPrice] = useState('') // 신규 술: 시세 등록가(선택)
   const [shop, setShop] = useState('')   // 신규 술: 판매점(선택)
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [openForm, setOpenForm] = useState<{ id: string; mode: string } | null>(null)
+  // 정렬: 최신변경순(기본) · 등록순 · 이름순
+  const [sort, setSort] = useState<'recent' | 'seq' | 'name'>('recent')
   // 필터: 이름(콤보박스 검색) · 주종 · 구분 · 카테고리
   const [qName, setQName] = useState('')
   const [fLiquor, setFLiquor] = useState('')
@@ -114,11 +125,14 @@ export default function WhiskyPage() {
   const purchasesOf = (id: string) => data.purchases.filter(p => p.whisky_id === id)
   const wishOf = (id: string) => data.wishlists.find(w => w.whisky_id === id)
   const wishShopsOf = (wid: string) => data.wishlistShops.filter(ws => ws.wishlist_id === wid).map(ws => ws.shop?.name).filter(Boolean)
-  const recosOf = (id: string, kind: 'friend' | 'expert' | 'gift' | 'photo') => data.recommendations.filter(r => r.whisky_id === id && r.recommender?.kind === kind)
+  const recosOf = (id: string, kind: 'friend' | 'expert' | 'gift' | 'photo' | 'vial') => data.recommendations.filter(r => r.whisky_id === id && r.recommender?.kind === kind)
   const dispName = (w: Whisky) => w.name_ko || w.name
   const catsOf = (id: string) => {
     const c: string[] = []
-    if (purchasesOf(id).length) c.push('구매완료')
+    const ps = purchasesOf(id)
+    if (ps.some((p) => isBottle(p.form))) c.push('구매완료')
+    if (ps.some((p) => !isBottle(p.form))) c.push('시음')
+    if (recosOf(id, 'vial').length) c.push('바이알시음')
     if (recosOf(id, 'gift').length) c.push('지인선물')
     if (wishOf(id)) c.push('구매희망')
     if (recosOf(id, 'friend').length) c.push('지인추천')
@@ -136,6 +150,10 @@ export default function WhiskyPage() {
     if (fStyle && w.style !== fStyle) return false
     if (fCat && !catsOf(w.id).includes(fCat)) return false
     return true
+  }).sort((a, b) => {
+    if (sort === 'name') return dispName(a).localeCompare(dispName(b), 'ko')
+    if (sort === 'seq') return (a.seq ?? 0) - (b.seq ?? 0) // 등록순(오름차순)
+    return (b.updated_at || '').localeCompare(a.updated_at || '') // 최신변경순
   })
   const filterOn = !!(qName.trim() || fLiquor || fStyle || fCat)
 
@@ -183,7 +201,7 @@ export default function WhiskyPage() {
           <div className="flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-700">
             <span className="font-medium">✓ 시세 카탈로그</span>
             <span className="text-emerald-600">— 주종·구분·캐스크·피트 자동 적용:</span>
-            {[catHit.liquor, catHit.style, catHit.cask, catHit.peat].filter(Boolean).map((v, i) => <span key={i} className="rounded bg-white px-1.5 py-0.5">{v}</span>)}
+            {[catHit.liquor, catHit.style, catHit.cask, catHit.peat, catHit.peat_ppm ? `🔥${catHit.peat_ppm}ppm` : ''].filter(Boolean).map((v, i) => <span key={i} className="rounded bg-white px-1.5 py-0.5">{v}</span>)}
             {catHit.priceMin != null && <span className="text-emerald-500">· 최저 {won(catHit.priceMin)}</span>}
           </div>
         )}
@@ -225,6 +243,7 @@ export default function WhiskyPage() {
             <option value="wish">구매희망</option>
             <option value="friend">지인추천</option>
             <option value="expert">전문가추천</option>
+            <option value="vial">바이알시음</option>
             <option value="photo">직접촬영</option>
           </select>
           <label className="cursor-pointer rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
@@ -262,6 +281,10 @@ export default function WhiskyPage() {
             {cat === 'expert' && <>
               <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="출처(필수)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
               <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="추천이유" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+            </>}
+            {cat === 'vial' && <>
+              <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="출처(데일리샷·지인 등, 선택)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+              <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="메모(선택)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
             </>}
             {cat === 'photo' && <>
               <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="메모(장소 등, 선택)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
@@ -306,7 +329,14 @@ export default function WhiskyPage() {
                 className="rounded-md border border-neutral-300 bg-white px-2.5 py-2 text-xs text-neutral-500 hover:bg-neutral-100">초기화</button>
             )}
           </div>
-          <div className="mt-2 text-[11px] text-neutral-500">{filtered.length} / {data.whiskies.length}개 표시</div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <span className="text-[11px] text-neutral-500">정렬:</span>
+            {([['recent', '최신변경순'], ['seq', '등록순'], ['name', '이름순']] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setSort(k)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium ${sort === k ? 'bg-amber-600 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}>{label}</button>
+            ))}
+            <span className="ml-auto text-[11px] text-neutral-500">{filtered.length} / {data.whiskies.length}개</span>
+          </div>
         </div>
       )}
 
@@ -321,9 +351,14 @@ export default function WhiskyPage() {
           const gifts = recosOf(w.id, 'gift')
           const friends = recosOf(w.id, 'friend')
           const experts = recosOf(w.id, 'expert')
+          const vials = recosOf(w.id, 'vial')
           const photos = recosOf(w.id, 'photo')
+          const buyCnt = buys.filter((p) => isBottle(p.form)).length
+          const tasteCnt = buys.length - buyCnt
           const badges: string[] = []
-          if (buys.length) badges.push('구매완료')
+          if (buyCnt) badges.push('구매완료')
+          if (tasteCnt) badges.push('시음')
+          if (vials.length) badges.push('바이알시음')
           if (gifts.length) badges.push('지인선물')
           if (wl) badges.push('구매희망')
           if (friends.length) badges.push('지인추천')
@@ -338,6 +373,7 @@ export default function WhiskyPage() {
                   )}
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
+                      {w.seq != null && <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-white" title="등록번호">#{w.seq}</span>}
                       <Link href={`/whisky/${w.id}`} className="text-base font-semibold text-neutral-900 hover:text-amber-700 hover:underline">{w.name_ko || w.name}</Link>
                       {w.name_en && <span className="text-xs text-neutral-400">{w.name_en}</span>}
                       {w.liquor && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-600">{w.liquor}</span>}
@@ -346,24 +382,26 @@ export default function WhiskyPage() {
                       {badges.map(b => <span key={b} className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">{b}</span>)}
                     </div>
                     <div className="mt-1 text-xs text-neutral-500">
-                      구매 {st?.purchase_count ?? 0}회 · 가격 {st?.price_count ?? 0}건 · 최저 {won(st?.price_min)} / 평균 {won(st?.price_avg)} / 최고 {won(st?.price_max)}
+                      구매 {buyCnt}회 · 노트 {w.noteCount ?? 0}개 · 가격 {st?.price_count ?? 0}건 · 최저 {won(st?.price_min)} / 평균 {won(st?.price_avg)} / 최고 {won(st?.price_max)}
                     </div>
+                    {w.updated_at && <div className="mt-0.5 text-[11px] text-neutral-400">🕒 {kst(w.updated_at)} 변경 (KST)</div>}
                   </div>
                 </div>
                 <button onClick={() => confirm(`'${w.name}' 삭제?`) && post('/api/whisky', { id: w.id }, 'DELETE')} className="text-xs text-neutral-300 hover:text-red-500">삭제</button>
               </div>
 
-              {/* 상세 */}
+              {/* 상세 (각 기록 ✕ 삭제) */}
               {buys.length > 0 && (
                 <ul className="mt-2 space-y-0.5 text-xs text-neutral-600">
-                  {buys.map(p => <li key={p.id}>· 구매 {p.purchase_date} · {p.shop?.name ?? '상점미상'} · {won(p.price)}</li>)}
+                  {buys.map(p => <li key={p.id} className="group flex items-center gap-1">· {isBottle(p.form) ? '구매' : '시음'} {p.purchase_date} · {p.shop?.name ?? '상점미상'}{p.volume_ml ? ` · ${p.volume_ml}ml` : ''} · {p.price === 0 ? 'free' : won(p.price)}<button onClick={() => post('/api/purchase', { id: p.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></li>)}
                 </ul>
               )}
-              {gifts.map(r => <div key={r.id} className="mt-1 text-xs text-neutral-600">· 지인선물 [{r.recommender?.name}] {r.reason ?? ''}</div>)}
-              {wl && <div className="mt-2 text-xs text-neutral-600">· 구매희망 {wishShopsOf(wl.id).length ? `(가능상점: ${wishShopsOf(wl.id).join(', ')})` : ''} {wl.memo ? `— ${wl.memo}` : ''}</div>}
-              {friends.map(r => <div key={r.id} className="mt-1 text-xs text-neutral-600">· 지인추천 [{r.recommender?.name}] {r.reason ?? ''}</div>)}
-              {experts.map(r => <div key={r.id} className="mt-1 text-xs text-neutral-600">· 전문가추천 [{r.recommender?.name}] {r.reason ?? ''}</div>)}
-              {photos.map(r => <div key={r.id} className="mt-1 text-xs text-neutral-600">· 직접촬영{r.reason ? ` — ${r.reason}` : ''}</div>)}
+              {gifts.map(r => <div key={r.id} className="mt-1 flex items-center gap-1 text-xs text-neutral-600">· 지인선물 [{r.recommender?.name}] {r.reason ?? ''}<button onClick={() => post('/api/recommendation', { id: r.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></div>)}
+              {wl && <div className="mt-2 flex items-center gap-1 text-xs text-neutral-600">· 구매희망 {wishShopsOf(wl.id).length ? `(가능상점: ${wishShopsOf(wl.id).join(', ')})` : ''} {wl.memo ? `— ${wl.memo}` : ''}<button onClick={() => post('/api/wishlist', { whisky_id: w.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></div>}
+              {friends.map(r => <div key={r.id} className="mt-1 flex items-center gap-1 text-xs text-neutral-600">· 지인추천 [{r.recommender?.name}] {r.reason ?? ''}<button onClick={() => post('/api/recommendation', { id: r.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></div>)}
+              {experts.map(r => <div key={r.id} className="mt-1 flex items-center gap-1 text-xs text-neutral-600">· 전문가추천 [{r.recommender?.name}] {r.reason ?? ''}<button onClick={() => post('/api/recommendation', { id: r.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></div>)}
+              {vials.map(r => <div key={r.id} className="mt-1 flex items-center gap-1 text-xs text-neutral-600">· 바이알시음{r.recommender?.name && r.recommender.name !== '바이알시음' ? ` [${r.recommender.name}]` : ''}{r.reason ? ` — ${r.reason}` : ''}<button onClick={() => post('/api/recommendation', { id: r.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></div>)}
+              {photos.map(r => <div key={r.id} className="mt-1 flex items-center gap-1 text-xs text-neutral-600">· 직접촬영{r.reason ? ` — ${r.reason}` : ''}<button onClick={() => post('/api/recommendation', { id: r.id }, 'DELETE')} className="text-neutral-300 hover:text-red-500" title="삭제">✕</button></div>)}
 
               {/* 액션 (드롭다운) */}
               <div className="mt-3">
@@ -378,6 +416,7 @@ export default function WhiskyPage() {
                   <option value="wish">구매희망</option>
                   <option value="friend">지인추천</option>
                   <option value="expert">전문가추천</option>
+                  <option value="vial">바이알시음</option>
                   <option value="photo">직접촬영</option>
                 </select>
               </div>
@@ -410,6 +449,7 @@ function InlineForm({ mode, whiskyId, busy, post }: { mode: string; whiskyId: st
       {mode === 'wish' && <>{input('shops', '구매가능상점(쉼표구분)')}{input('memo', '메모')}</>}
       {mode === 'friend' && <>{input('name', '지인명')}{input('reason', '추천이유')}</>}
       {mode === 'expert' && <>{input('name', '출처')}{input('reason', '추천이유')}</>}
+      {mode === 'vial' && <>{input('name', '출처(선택)')}{input('reason', '메모(선택)')}</>}
       {mode === 'photo' && <>{input('reason', '메모(장소 등, 선택)')}</>}
       <button onClick={submit} disabled={busy} className="rounded-md bg-neutral-800 px-3 py-1.5 text-xs text-white hover:bg-neutral-900 disabled:opacity-50">저장</button>
     </div>

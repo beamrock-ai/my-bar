@@ -10,6 +10,10 @@ export async function POST(req: Request) {
   }
   if (!whisky_id) return NextResponse.json({ error: 'whisky_id required' }, { status: 400 })
 
+  // 구매완료 ↔ 구매희망 공존 불가: 이미 구매완료면 구매희망 등록 차단
+  const { count } = await db.from('purchase').select('id', { count: 'exact', head: true }).eq('whisky_id', whisky_id)
+  if (count && count > 0) return NextResponse.json({ error: '이미 구매완료 항목이라 구매희망으로 등록할 수 없습니다' }, { status: 400 })
+
   const { data: wl, error } = await db
     .from('wishlist')
     .upsert({ whisky_id, memo: memo ?? null }, { onConflict: 'whisky_id' })

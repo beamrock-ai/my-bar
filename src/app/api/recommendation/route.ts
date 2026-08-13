@@ -2,16 +2,18 @@ import { NextResponse } from 'next/server'
 import { createServiceClient, getOrCreateRecommender } from '@/lib/supabase'
 import { pushMirrorSafe } from '@/lib/whisky-sync'
 
-// 추천 추가 (지인추천 kind=friend / 전문가추천 kind=expert / 직접촬영 kind=photo)
+// 추천 추가 (지인추천 friend / 전문가추천 expert / 지인선물 gift / 직접촬영 photo / 바이알시음 vial)
 export async function POST(req: Request) {
   const db = createServiceClient()
   const { whisky_id, kind, name, reason } = (await req.json()) as {
-    whisky_id?: string; kind?: 'friend' | 'expert' | 'gift' | 'photo'; name?: string; reason?: string
+    whisky_id?: string; kind?: 'friend' | 'expert' | 'gift' | 'photo' | 'vial'; name?: string; reason?: string
   }
-  if (!whisky_id || !kind || (kind !== 'photo' && !(name ?? '').trim())) {
+  const nameOptional = kind === 'photo' || kind === 'vial' // 이름 없이도 등록 가능
+  if (!whisky_id || !kind || (!nameOptional && !(name ?? '').trim())) {
     return NextResponse.json({ error: 'whisky_id, kind, name(지인명/출처) 필요' }, { status: 400 })
   }
-  const recommender_id = await getOrCreateRecommender(db, (name ?? '').trim() || '직접촬영', kind)
+  const fallback = kind === 'vial' ? '바이알시음' : '직접촬영'
+  const recommender_id = await getOrCreateRecommender(db, (name ?? '').trim() || fallback, kind)
   const { data, error } = await db
     .from('recommendation')
     .insert({ whisky_id, recommender_id, reason: reason ?? null })

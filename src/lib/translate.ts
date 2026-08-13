@@ -13,7 +13,10 @@ export type WhiskyInfo = {
   type: string | null
   style: string | null
   cask: string | null
+  oak_species: string | null
   peat: string | null
+  peat_ppm: number | null
+  sherry_type: string | null
   distillery: string | null
   abv: number | null
   description: string | null
@@ -27,6 +30,7 @@ export type WhiskyInfo = {
 
 const EMPTY: WhiskyInfo = {
   name_ko: null, name_en: null, liquor: null, type: null, style: null, cask: null, peat: null, distillery: null, abv: null,
+  oak_species: null, peat_ppm: null, sherry_type: null,
   description: null, nose: null, palate: null, finish: null, aroma: null, flavour: null, evaluation: null,
 }
 
@@ -41,6 +45,23 @@ function toRadar(o: unknown): Radar | null {
   return { cereal: g('cereal'), fruity: g('fruity'), floral: g('floral'), peaty: g('peaty'), feinty: g('feinty'), sulphur: g('sulphur'), woody: g('woody'), winey: g('winey') }
 }
 
+// AI가 그래도 포괄어를 내면 세부 종류로 후처리 치환(사용자 선택 2). 조합("A+B")은 항목별 치환+중복제거.
+const CASK_NORMALIZE: Record<string, string> = {
+  '쉐리캐스크': '올로로소캐스크', '셰리캐스크': '올로로소캐스크', '쉐리': '올로로소캐스크', '셰리': '올로로소캐스크',
+  '포트캐스크': '루비포트캐스크', '포트': '루비포트캐스크',
+  '복합': '기타',
+}
+export function normalizeCask(v: string | null): string | null {
+  if (!v) return v
+  const parts = v.split('+').map((p) => p.trim().replace(/\s+/g, '')).filter(Boolean).map((t) => CASK_NORMALIZE[t] ?? t)
+  const uniq = Array.from(new Set(parts))
+  return uniq.join('+') || null
+}
+
+// 캐스크 12종 정의(참고용): 버번캐스크=바닐라·카라멜·코코넛·바나나 / 버진오크=새 오크 / 피노=드라이·미네랄·허브 /
+//  만자니아=캐모마일·짠맛/바다맛 / 아몬티야도=말린과일·견과 / 팔로코르타도=아몬티야도향+올로로소맛(희귀) /
+//  올로로소=진하고 묵직·견과·블랙베리·스파이시 / PX=매우 달콤·건포도 농축 / 루비포트=라즈베리·체리·딸기 /
+//  토니포트=블랙베리·견과·오크 / 마데이라=꿀단맛·망고·강한 산미 / 마르살라=쉐리+포트+마데이라 혼합적. 복합은 "A+B"로 연결.
 // 주류명(한/영) → 표준명 + 주종·종류·증류소·도수 + 설명 + 향/맛/피니시 + 향/맛 레이더 + 평가 (1회 LLM 호출)
 export async function whiskyInfo(input: string): Promise<WhiskyInfo> {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -60,8 +81,11 @@ export async function whiskyInfo(input: string): Promise<WhiskyInfo> {
             `"liquor": 주종(반드시 다음 중 하나: 위스키/보드카/진/럼/데킬라/브랜디/리큐르/사케/막걸리/소주/전통주/와인/맥주/기타),\n` +
             `"type": 세부 종류(예: 싱글몰트 스카치, 아일라 진, 아마로),\n` +
             `"style": 위스키 세부구분(위스키일 때만 다음 중 하나: 싱글몰트/블렌디드/블렌디드몰트/싱글그레인/버번/라이/기타, 위스키가 아니면 "해당없음"),\n` +
-            `"cask": 캐스크 숙성(예: 버번캐스크/쉐리캐스크/포트캐스크/버진오크/복합, 위스키가 아니면 "해당없음"),\n` +
+            `"cask": 캐스크 이력. 값은 반드시 이 12종에서만 고름: 버진오크/버번캐스크/피노캐스크/만자니아캐스크/아몬티야도캐스크/팔로코르타도캐스크/올로로소캐스크/PX캐스크/루비포트캐스크/토니포트캐스크/마데이라캐스크/마르살라캐스크(모르면 기타, 위스키 아니면 "해당없음"). 2개 이상 섞였으면 "버번캐스크+올로로소캐스크"처럼 세부명을 +로 연결. 단어 '복합'·'쉐리캐스크'·'포트캐스크'는 절대 쓰지 말 것(세부 종류로 치환). 예: 발베니 더블우드=버번캐스크+올로로소캐스크, 글렌드로낙 12년=올로로소캐스크+PX캐스크,\n` +
+            `"oak_species": 오크 품종(반드시 다음 중 하나: 아메리칸오크/유러피안오크/혼합/불명, 위스키가 아니면 "해당없음". 라벨·설명에 명시 안 됐으면 일반 원칙으로 추정 — 버번캐스크·버진오크는 사실상 아메리칸오크, 쉐리캐스크는 아메리칸·유러피안 둘 다 가능하므로 불확실하면 "불명"),\n` +
             `"peat": 피트 여부(위스키면 "피트" 또는 "논피트", 위스키가 아니면 "해당없음"),\n` +
+            `"peat_ppm": 피트 강도(몰트 페놀 ppm 참고치, 숫자만). 논피트는 0, 피트인데 공식 ppm을 확실히 모르면 null(추측 금지). 예: 라프로익 40, 아드벡 55, 하이랜드파크 20, 옥토모어 100 이상,\n` +
+            `"sherry_type": 셰리 캐스크 숙성이면 대표 셰리 종류 하나(반드시: PX/올로로소/아몬티야도/피노/팔로코르타도/만자니아, 여러 셰리 섞이면 "복합"), 셰리와 무관하면 "없음". 위스키 아니면 "없음". 예: 맥캘란 쉐리오크=올로로소, 글렌드로낙=복합, 글렌피딕 12년=없음,\n` +
             `"distillery": 증류소/양조장·지역(예: 아드벡, 아일라, 스코틀랜드), "abv": 도수 숫자만(%),\n` +
             `"description": 기본 설명 2~3문장,\n` +
             `"nose": 향, "palate": 맛(입안), "finish": 피니시(여운),\n` +
@@ -88,7 +112,11 @@ export async function whiskyInfo(input: string): Promise<WhiskyInfo> {
     return {
       name_ko: s(p.name_ko), name_en: s(p.name_en), liquor: s(p.liquor),
       type: s(p.type), style: s(p.style) === '해당없음' ? null : s(p.style),
-      cask: s(p.cask) === '해당없음' ? null : s(p.cask), peat: s(p.peat) === '해당없음' ? null : s(p.peat),
+      cask: normalizeCask(s(p.cask) === '해당없음' ? null : s(p.cask)),
+      oak_species: s(p.oak_species) === '해당없음' ? null : s(p.oak_species),
+      peat: s(p.peat) === '해당없음' ? null : s(p.peat),
+      peat_ppm: p.peat_ppm == null ? null : num(p.peat_ppm),
+      sherry_type: s(p.sherry_type) === '해당없음' ? '없음' : s(p.sherry_type),
       distillery: s(p.distillery), abv: num(p.abv),
       description: s(p.description), nose: s(p.nose), palate: s(p.palate), finish: s(p.finish),
       aroma: toRadar(p.aroma), flavour: toRadar(p.flavour),
@@ -96,6 +124,57 @@ export async function whiskyInfo(input: string): Promise<WhiskyInfo> {
     }
   } catch {
     return EMPTY
+  }
+}
+
+export type WhiskyKeyword = { term: string; term_en: string | null; category: string | null; definition: string | null }
+
+// 위스키 사진(라벨/병) 비전 분석 → 특성 키워드 + 키워드 기반 설명문
+export async function analyzeWhiskyKeywords(
+  images: { media_type: string; data: string }[],
+  name: string,
+): Promise<{ keywords: WhiskyKeyword[]; summary: string }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey || !images.length) return { keywords: [], summary: '' }
+  try {
+    const client = new Anthropic({ apiKey })
+    const imgBlocks = images.slice(0, 8).map((im) => ({
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: im.media_type as 'image/jpeg', data: im.data },
+    }))
+    const msg = await client.messages.create({
+      model: 'claude-sonnet-5',
+      max_tokens: 2500,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            ...imgBlocks,
+            {
+              type: 'text',
+              text:
+                `위 사진은 위스키 "${name}"의 병/라벨이다. 라벨 정보를 근거로 JSON 객체 하나만 출력(코드펜스 금지, 한국어).\n` +
+                `{\n` +
+                `"keywords": [{"term":"한글 용어","term_en":"영문/원어","category":"지역|증류소|캐스크|피트|향미|숙성|병입·표기|스타일 중 하나","definition":"한국어 1문장 정의"}] (라벨의 지역·증류소·숙성연수·캐스크·도수 + 대표 향미를 위스키 용어로, 중복제거, 최대 15개),\n` +
+                `"summary": "위 키워드들을 근거로 이 위스키를 설명하는 3~5문장(어떤 스타일·캐스크·향미인지, 라벨에서 읽은 특징 중심으로 자연스럽게 서술)"\n` +
+                `}`,
+            },
+          ],
+        },
+      ],
+    })
+    const b = msg.content.find((x) => x.type === 'text')
+    const t = b && b.type === 'text' ? b.text : ''
+    const m = t.match(/\{[\s\S]*\}/)
+    if (!m) return { keywords: [], summary: '' }
+    const obj = JSON.parse(m[0]) as { keywords?: Record<string, unknown>[]; summary?: unknown }
+    const s = (v: unknown) => { const x = (v == null ? '' : String(v)).trim(); return x || null }
+    const keywords = (obj.keywords ?? [])
+      .filter((x) => x && String(x.term ?? '').trim())
+      .map((x) => ({ term: String(x.term).trim(), term_en: s(x.term_en), category: s(x.category), definition: s(x.definition) }))
+    return { keywords, summary: (s(obj.summary) ?? '') }
+  } catch {
+    return { keywords: [], summary: '' }
   }
 }
 

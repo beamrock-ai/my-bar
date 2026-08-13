@@ -5,6 +5,7 @@ const CARDS = [
   { icon: '🍶', name: '노트', desc: '위스키·보드카·리큐르 등 관리', href: '/whisky' },
   { icon: '🏷️', name: '시세', desc: '판매점·일자별 · 낮은가격순', href: '/prices' },
   { icon: '🏆', name: '순위', desc: '평점·시음유형별 랭킹', href: '/ranking' },
+  { icon: '🍽️', name: '콜키지', desc: '콜키지 가능 장소 · 방문·서비스·평점', href: '/corkage' },
   { icon: '🍷', name: '액세서리', desc: '잔·디캔터·바도구 등', href: '/accessory' },
   { icon: '📖', name: '용어사전', desc: '위스키 용어 검색·색인', href: '/glossary' },
 ]

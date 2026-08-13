@@ -37,7 +37,7 @@ export async function getOrCreateShop(db: HobbyClient, name?: string | null): Pr
 export async function getOrCreateRecommender(
   db: HobbyClient,
   name: string,
-  kind: 'friend' | 'expert' | 'gift' | 'photo',
+  kind: 'friend' | 'expert' | 'gift' | 'photo' | 'vial',
 ): Promise<string | null> {
   const n = (name ?? '').trim()
   if (!n) return null

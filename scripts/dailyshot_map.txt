@@ -1,0 +1,4 @@
+# 데일리샷 일자별 대표가 추적 목록  (형식: 한글명<TAB>품목ID  또는  한글명<TAB>URL)
+# 품목ID = dailyshot.co/m/item/<품목ID> 의 숫자.  실행: python3 scripts/dailyshot_sync.py --map scripts/dailyshot_map.txt
+조니워커 블랙 1L	4850
+조니워커 블랙 700ml	2460

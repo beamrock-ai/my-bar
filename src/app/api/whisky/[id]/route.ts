@@ -6,13 +6,14 @@ import { pushMirrorSafe } from '@/lib/whisky-sync'
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params
   const db = createServiceClient()
-  const [whisky, purchases, observations, recommendations, wishlist, images] = await Promise.all([
+  const [whisky, purchases, observations, recommendations, wishlist, images, history] = await Promise.all([
     db.from('whisky').select('*').eq('id', id).single(),
     db.from('purchase').select('*, shop:shop_id(name)').eq('whisky_id', id).order('purchase_date', { ascending: false }),
     db.from('price_observation').select('*, shop:shop_id(name)').eq('whisky_id', id).order('price'),
     db.from('recommendation').select('*, recommender:recommender_id(name, kind)').eq('whisky_id', id),
     db.from('wishlist').select('id').eq('whisky_id', id).maybeSingle(),
     db.from('whisky_image').select('*').eq('whisky_id', id).order('is_primary', { ascending: false }).order('created_at'),
+    db.from('whisky_history').select('*').eq('whisky_id', id).order('entry_date', { ascending: false }).order('created_at', { ascending: false }),
   ])
   if (whisky.error) return NextResponse.json({ error: whisky.error.message }, { status: 404 })
 
@@ -31,11 +32,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     recommendations: recommendations.data ?? [],
     hasWishlist: !!wishlist.data,
     images: images.data ?? [],
+    history: history.data ?? [],
   })
 }
 
 // 위스키(객관, 공유) 편집 필드 — 주관 테이스팅은 /profile 라우트에서 처리
-const EDITABLE = ['name_ko', 'name_en', 'liquor', 'type', 'style', 'cask', 'peat', 'distillery', 'abv', 'description']
+const EDITABLE = ['name_ko', 'name_en', 'liquor', 'type', 'style', 'cask', 'oak_species', 'peat', 'peat_ppm', 'sherry_type', 'distillery', 'abv', 'volume_ml', 'description', 'blend_ratio', 'price_name']
 
 // 편집 저장
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {

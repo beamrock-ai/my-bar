@@ -9,6 +9,7 @@ const NAV = [
   { href: '/whisky', label: '🍶 노트' },
   { href: '/prices', label: '🏷️ 시세' },
   { href: '/ranking', label: '🏆 순위' },
+  { href: '/corkage', label: '🍽️ 콜키지' },
   { href: '/accessory', label: '🍷 액세서리' },
   { href: '/glossary', label: '📖 용어사전' },
 ]

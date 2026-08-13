@@ -10,17 +10,22 @@ export async function GET() {
   const db = createServiceClient()
   // 시트에 수동 추가된 위스키를 먼저 DB로 가져옴(시트→DB 자동 연동)
   await pullAdd(db).catch(() => {})
-  const [whiskies, stats, purchases, wishlists, wishlistShops, recommendations, shops] = await Promise.all([
-    db.from('whisky').select('*').order('name'),
+  const [whiskies, stats, purchases, wishlists, wishlistShops, recommendations, shops, history] = await Promise.all([
+    db.from('whisky').select('*').order('updated_at', { ascending: false }),
     db.from('whisky_stats').select('*'),
     db.from('purchase').select('*, shop:shop_id(name)').order('purchase_date', { ascending: false }),
     db.from('wishlist').select('*'),
     db.from('wishlist_shop').select('*, shop:shop_id(name)'),
     db.from('recommendation').select('*, recommender:recommender_id(name, kind)').order('created_at', { ascending: false }),
     db.from('shop').select('*').order('name'),
+    db.from('whisky_history').select('whisky_id'),
   ])
+  // 위스키별 히스토리(일자별 기록) 개수 = "노트 개수"
+  const hcnt = new Map<string, number>()
+  for (const h of (history.data ?? []) as { whisky_id: string }[]) hcnt.set(h.whisky_id, (hcnt.get(h.whisky_id) ?? 0) + 1)
+  const whiskyRows = (whiskies.data ?? []).map((w) => ({ ...w, noteCount: hcnt.get(w.id as string) ?? 0 }))
   return NextResponse.json({
-    whiskies: whiskies.data ?? [],
+    whiskies: whiskyRows,
     stats: stats.data ?? [],
     purchases: purchases.data ?? [],
     wishlists: wishlists.data ?? [],
@@ -36,6 +41,12 @@ export async function POST(req: Request) {
   const form = await req.formData()
   const n = String(form.get('name') ?? '').trim()
   if (!n) return NextResponse.json({ error: '위스키명을 입력하세요' }, { status: 400 })
+
+  // "없을 때만 추가"(시세→노트 추가 등): 이미 있으면 프로필 덮어쓰지 않고 그대로 반환
+  if (String(form.get('ifNew') ?? '') === '1') {
+    const { data: exist } = await db.from('whisky').select('id, name').eq('name', n).maybeSingle()
+    if (exist) return NextResponse.json({ ...exist, alreadyExists: true })
+  }
 
   // 시세 카탈로그 조회(시트 원본) — 선택 시 주종·분류·캐스크·피트를 시트값으로 채움 + PK(한글명) 동일
   const catalog = await getCatalog().catch(() => [])
@@ -57,7 +68,11 @@ export async function POST(req: Request) {
     type: info.type,
     style: catHit?.style || styleInput || info.style,
     cask: catHit?.cask || info.cask,
+    oak_species: info.oak_species,
     peat: catHit?.peat || info.peat,
+    peat_ppm: catHit?.peat_ppm ?? info.peat_ppm,
+    sherry_type: catHit?.sherry_type || info.sherry_type,
+    volume_ml: catHit?.volume ?? null,
     distillery: info.distillery,
     abv: info.abv,
     description: info.description,
@@ -91,13 +106,26 @@ export async function POST(req: Request) {
   let addedToCatalog = false
   const priceIn = String(form.get('price') ?? '').replace(/[^0-9]/g, '')
   if (!inCatalog && priceIn) {
+    const shopIn = String(form.get('shop') ?? '').trim() || '직접입력'
+    const today = new Date().toISOString().slice(0, 10)
+    const volIn = String(form.get('volume') ?? '').replace(/[^0-9]/g, '')
     try {
+      // 소스(시트) 추가
       await appendPriceRow({
         주종: (record.liquor as string) || '', 분류: (record.style as string) || '',
         캐스크: (record.cask as string) || '', 피트: (record.peat as string) || '',
-        한글명: canonical, 판매점: String(form.get('shop') ?? '').trim() || '직접입력',
-        가격: parseInt(priceIn), 기준일자: new Date().toISOString().slice(0, 10),
-        용량ml: String(form.get('volume') ?? '').replace(/[^0-9]/g, ''), 비고: '주류노트 등록',
+        PPM: record.peat_ppm != null ? String(record.peat_ppm) : '',
+        셰리: (record.sherry_type as string) || '',
+        한글명: canonical, 판매점: shopIn, 가격: parseInt(priceIn),
+        기준일자: today, 용량ml: volIn, 비고: '주류노트 등록',
+      })
+      // DB(liquor_price)에도 즉시 반영(조회는 DB 기준이므로)
+      await db.from('liquor_price').insert({
+        liquor: (record.liquor as string) || null, style: (record.style as string) || null,
+        cask: (record.cask as string) || null, peat: (record.peat as string) || null,
+        peat_ppm: (record.peat_ppm as number | null) ?? null, sherry_type: (record.sherry_type as string) || null,
+        name: canonical, shop: shopIn, price: parseInt(priceIn),
+        observed_on: today, volume_ml: volIn ? parseInt(volIn) : null, memo: '주류노트 등록',
       })
       addedToCatalog = true
     } catch (e) {

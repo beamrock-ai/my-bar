@@ -30,15 +30,44 @@ export async function readWhiskySheet(): Promise<string[][]> {
 export async function readPriceSheet(): Promise<string[][]> {
   const res = await client().spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `${PRICE_TAB}!A1:L3000`,
+    range: `${PRICE_TAB}!A1:M3000`,
   })
   return (res.data.values ?? []) as string[][]
+}
+
+// 데일리샷메타 탭(위스키 품목ID + 대표가) 원본 읽기
+export async function readDailyshotMeta(): Promise<string[][]> {
+  const res = await client().spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `데일리샷메타!A1:F5000`,
+  })
+  return (res.data.values ?? []) as string[][]
+}
+
+// 콜키지 탭 원본 읽기
+export async function readCorkageSheet(): Promise<string[][]> {
+  const res = await client().spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `콜키지!A1:N1000`,
+  })
+  return (res.data.values ?? []) as string[][]
+}
+
+// 콜키지 탭 전체 미러 쓰기(DB → 시트)
+export async function writeCorkageSheet(rows: string[][]): Promise<void> {
+  const s = client()
+  await s.spreadsheets.values.clear({ spreadsheetId: SHEET_ID, range: `콜키지!A1:N10000` })
+  if (rows.length) {
+    await s.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID, range: `콜키지!A1`, valueInputOption: 'USER_ENTERED', requestBody: { values: rows },
+    })
+  }
 }
 
 // 주류시세 탭에 1행 추가(헤더명 기준 위치). fields 키 = 헤더명(주종/분류/캐스크/피트/한글명/판매점/가격/기준일자/용량ml/링크/비고)
 export async function appendPriceRow(fields: Record<string, string | number>): Promise<void> {
   const s = client()
-  const header = ((await s.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${PRICE_TAB}!A1:L1` })).data.values?.[0] ?? []) as string[]
+  const header = ((await s.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${PRICE_TAB}!A1:M1` })).data.values?.[0] ?? []) as string[]
   const row = header.map((h) => { const v = fields[(h ?? '').trim()]; return v == null ? '' : v })
   await s.spreadsheets.values.append({
     spreadsheetId: SHEET_ID,

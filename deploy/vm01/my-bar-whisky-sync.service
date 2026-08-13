@@ -5,3 +5,4 @@ After=my-bar-next.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/curl -s -m 60 -X POST http://127.0.0.1:3003/my-bar/api/whisky/sync
+ExecStart=/usr/bin/curl -s -m 60 -X POST http://127.0.0.1:3003/my-bar/api/prices/sync

@@ -1,15 +1,28 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { sherryInfoOf } from '@/lib/sherry'
 
 const BP = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
+const nkey = (s: string) => (s ?? '').replace(/\s+/g, '') // PK 비교: 띄어쓰기 제거 풀네임
 const won = (n: number | null | undefined) => (n == null ? '-' : `${n.toLocaleString()}원`)
+// 시세엔 오크품종 데이터가 없어 캐스크에서 추론(버번캐스크·버진오크=아메리칸오크, 셰리·포트류는 둘 다 가능→불명)
+const AMERICAN_OAK = new Set(['버번캐스크', '버진오크'])
+function oakFromCask(cask: string): string {
+  if (!cask) return ''
+  const parts = cask.split('+').map((s) => s.trim()).filter(Boolean)
+  if (!parts.length) return ''
+  if (parts.every((p) => AMERICAN_OAK.has(p))) return '아메리칸오크'
+  if (parts.some((p) => AMERICAN_OAK.has(p))) return '혼합'
+  return '불명'
+}
 
 type Price = {
-  liquor: string; style: string; cask: string; peat: string
+  liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; sherry_type: string
   name: string; shop: string; price: number; date: string; volume: number | null; url: string; memo: string
 }
-type SortKey = 'price' | 'name' | 'date'
+type SortKey = 'price' | 'name' | 'date' | 'count'
 
 export default function PricesPage() {
   const [prices, setPrices] = useState<Price[] | null>(null)
@@ -23,55 +36,122 @@ export default function PricesPage() {
   const [selected, setSelected] = useState<string | null>(null) // 드릴다운: 특정 주류
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [addMsg, setAddMsg] = useState('')
+  const [noteMap, setNoteMap] = useState<Map<string, string>>(new Map()) // 정규화된 한글명 → 노트 id
 
-  // 구글시트[주류시세] → 조회 + DB(liquor_price) 미러 적재. manual=버튼 클릭(피드백 표시)
-  const load = async (manual = false) => {
-    if (manual) { setSyncing(true); setSyncMsg('') }
+  // 조회: DB(liquor_price)에서 읽음 (구글시트 직접 읽지 않음)
+  const load = async () => {
+    const res = await fetch(`${BP}/api/prices`, { cache: 'no-store' })
+    setPrices((await res.json()).prices ?? [])
+  }
+  // 노트 목록 → 한글명(띄어쓰기 제거) → id 맵. 시세 상세에서 "노트로 이동" 버튼 판단용
+  const loadNotes = async () => {
     try {
-      const res = await fetch(`${BP}/api/price-sheet`, { cache: 'no-store' })
+      const j = await (await fetch(`${BP}/api/whisky`, { cache: 'no-store' })).json()
+      const m = new Map<string, string>()
+      // 자동 매칭(한글명) → 수동 매칭(price_name)이 있으면 우선 적용(덮어씀)
+      for (const w of (j.whiskies ?? [])) { const k = nkey(w.name_ko || w.name || ''); if (k) m.set(k, w.id) }
+      for (const w of (j.whiskies ?? [])) { const k = nkey(w.price_name || ''); if (k) m.set(k, w.id) }
+      setNoteMap(m)
+    } catch { /* ignore */ }
+  }
+  // 동기화: 소스(구글시트[주류시세]) → DB 적재 후 다시 조회
+  const sync = async () => {
+    setSyncing(true); setSyncMsg('')
+    try {
+      const res = await fetch(`${BP}/api/prices/sync`, { method: 'POST' })
       const j = await res.json()
-      const list: Price[] = j.prices ?? []
-      setPrices(list)
-      if (manual) setSyncMsg(j.error ? `동기화 실패: ${j.error}` : `${list.length.toLocaleString()}건 동기화 완료`)
+      if (j.error || j.ok === false) { setSyncMsg(`동기화 실패: ${j.error ?? '오류'}`); return }
+      await load()
+      setSyncMsg(`${(j.count ?? 0).toLocaleString()}건 동기화 완료`)
     } catch {
-      if (manual) setSyncMsg('동기화 실패: 네트워크 오류')
+      setSyncMsg('동기화 실패: 네트워크 오류')
     } finally {
-      if (manual) setSyncing(false)
+      setSyncing(false)
     }
   }
+  // 데일리샷 동기화: 데일리샷메타(구글시트) → DB(판매점=데일리샷, 오늘자)
+  const syncDailyshot = async () => {
+    setSyncing(true); setSyncMsg('')
+    try {
+      const j = await (await fetch(`${BP}/api/prices/dailyshot-sync`, { method: 'POST' })).json()
+      if (j.error || j.ok === false) { setSyncMsg(`데일리샷 동기화 실패: ${j.error ?? '오류'}`); return }
+      await load()
+      setSyncMsg(`데일리샷 ${(j.total ?? 0).toLocaleString()}종 중 변동 ${((j.changed ?? 0) + (j.new ?? 0)).toLocaleString()}건 반영 (신규 ${(j.new ?? 0).toLocaleString()})`)
+    } catch {
+      setSyncMsg('데일리샷 동기화 실패: 네트워크 오류')
+    } finally { setSyncing(false) }
+  }
 
-  useEffect(() => { void load() }, [])
+  // 시세에서 선택한 술을 노트(컬렉션)에 추가(이미 있으면 덮어쓰지 않음)
+  const addToNote = async (name: string) => {
+    setAdding(true); setAddMsg('')
+    try {
+      const fd = new FormData(); fd.append('name', name); fd.append('ifNew', '1')
+      const res = await fetch(`${BP}/api/whisky`, { method: 'POST', body: fd })
+      const j = await res.json()
+      if (!res.ok) { setAddMsg(`추가 실패: ${j.error ?? '오류'}`); return }
+      setAddMsg(j.alreadyExists ? '이미 노트에 있습니다' : '✓ 노트에 추가했습니다')
+      await loadNotes() // 추가 후 "노트로 이동" 버튼으로 전환
+    } catch {
+      setAddMsg('추가 실패: 네트워크 오류')
+    } finally { setAdding(false) }
+  }
+
+  const [pendingName, setPendingName] = useState<string | null>(null) // ?name= 딥링크(노트→시세)
+  useEffect(() => { void load(); void loadNotes(); setPendingName(new URLSearchParams(window.location.search).get('name')) }, [])
+  useEffect(() => { setAddMsg('') }, [selected])
+  // 시세 로드 후 딥링크 적용: PK(띄어쓰기 제거) 일치 술이 있으면 드릴다운 열고, 없으면 검색어로
+  useEffect(() => {
+    if (!pendingName || !prices) return
+    const hit = prices.find((p) => nkey(p.name) === nkey(pendingName))
+    if (hit) setSelected(hit.name); else setQ(pendingName)
+    setPendingName(null)
+  }, [prices, pendingName])
 
   const { liquors, styles, shops, peats, names } = useMemo(() => {
     const set = (key: keyof Price) => Array.from(new Set((prices ?? []).map((p) => String(p[key] ?? '').trim()).filter(Boolean))).sort()
     return { liquors: set('liquor'), styles: set('style'), shops: set('shop'), peats: set('peat'), names: set('name') }
   }, [prices])
 
-  const rows = useMemo(() => {
+  // 필터만 적용(중복제거 전) — 통계·목록 공유
+  const filteredAll = useMemo(() => {
     if (!prices) return []
-    const cmp = (a: Price, b: Price) => {
-      let v = 0
-      if (sortKey === 'price') v = a.price - b.price
-      else if (sortKey === 'name') v = a.name.localeCompare(b.name, 'ko')
-      else v = (a.date || '').localeCompare(b.date || '')
-      return sortDir === 'asc' ? v : -v
-    }
-    const filtered = prices
+    return prices
       .filter((p) => (q.trim() ? p.name.toLowerCase().includes(q.trim().toLowerCase()) : true))
       .filter((p) => (fLiquor ? p.liquor === fLiquor : true))
       .filter((p) => (fStyle ? p.style === fStyle : true))
       .filter((p) => (fShop ? p.shop === fShop : true))
       .filter((p) => (fPeat ? p.peat === fPeat : true))
-    // 한글명 기준 1건: 최신 기준일자(동일자면 최저가) 대표만
+  }, [prices, q, fLiquor, fStyle, fShop, fPeat])
+
+  // 술별 시세(일자별 가격) 개수 = 해당 한글명의 관측 행 수
+  const cntByName = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of filteredAll) m.set(p.name, (m.get(p.name) ?? 0) + 1)
+    return m
+  }, [filteredAll])
+
+  // 목록: 한글명 기준 1건(최신일자·동일자면 최저가) + 정렬
+  const rows = useMemo(() => {
+    const cmp = (a: Price, b: Price) => {
+      let v = 0
+      if (sortKey === 'price') v = a.price - b.price
+      else if (sortKey === 'name') v = a.name.localeCompare(b.name, 'ko')
+      else if (sortKey === 'count') v = (cntByName.get(a.name) ?? 0) - (cntByName.get(b.name) ?? 0)
+      else v = (a.date || '').localeCompare(b.date || '')
+      return sortDir === 'asc' ? v : -v
+    }
     const byName = new Map<string, Price>()
-    for (const p of filtered) {
+    for (const p of filteredAll) {
       const cur = byName.get(p.name)
       if (!cur) { byName.set(p.name, p); continue }
       const d = (p.date || '').localeCompare(cur.date || '')
       if (d > 0 || (d === 0 && p.price < cur.price)) byName.set(p.name, p)
     }
     return Array.from(byName.values()).sort(cmp)
-  }, [prices, q, fLiquor, fStyle, fShop, fPeat, sortKey, sortDir])
+  }, [filteredAll, sortKey, sortDir, cntByName])
 
   const setSort = (k: SortKey) => {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -92,18 +172,38 @@ export default function PricesPage() {
     const shopList = Array.from(new Set(det.map((d) => d.shop || '상점미상'))).sort()
     const dateList = Array.from(new Set(det.map((d) => d.date || '-'))).sort()
     const cell = (shop: string, date: string) => det.find((d) => (d.shop || '상점미상') === shop && (d.date || '-') === date)?.price ?? null
-    const attr = det[0]
+    // 대표 속성: 비어있지 않은 행에서 값 채택(첫 행이 비어도 표시되게)
+    const pick = (k: 'liquor' | 'style' | 'cask' | 'peat') => det.find((d) => d[k])?.[k] ?? ''
+    const attr = { liquor: pick('liquor'), style: pick('style'), cask: pick('cask'), peat: pick('peat'), peat_ppm: det.find((d) => d.peat_ppm != null)?.peat_ppm ?? null, sherry_type: det.find((d) => d.sherry_type && d.sherry_type !== '없음')?.sherry_type ?? '', volume: det.find((d) => d.volume)?.volume ?? null }
     const vals = det.map((d) => d.price)
     const mn = Math.min(...vals), mx = Math.max(...vals), avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)
+    const noteId = noteMap.get(nkey(selected)) ?? null // 이 술이 노트에 등록돼 있으면 그 id
     return (
       <div className="mx-auto max-w-3xl">
-        <button onClick={() => setSelected(null)} className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-amber-300 hover:bg-amber-50">← 주류시세 목록</button>
+        <div className="flex items-center justify-between gap-2">
+          <button onClick={() => setSelected(null)} className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-amber-300 hover:bg-amber-50">← 주류시세 목록</button>
+          {noteId
+            ? <Link href={`/whisky/${noteId}`}
+                title="이 술의 노트로 이동합니다"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">
+                📖 노트로 이동
+              </Link>
+            : <button onClick={() => void addToNote(selected)} disabled={adding}
+                title="이 술을 노트(내 컬렉션)에 추가합니다"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50">
+                {adding ? '추가 중…' : '🍶 노트에 추가'}
+              </button>}
+        </div>
+        {addMsg && <p className={`mt-2 text-xs ${addMsg.startsWith('추가 실패') ? 'text-red-600' : addMsg.startsWith('이미') ? 'text-neutral-500' : 'text-emerald-600'}`}>{addMsg}</p>}
         <h1 className="mt-3 text-2xl font-semibold text-neutral-900">{selected}</h1>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {attr.liquor && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-600">{attr.liquor}</span>}
           {attr.style && <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-600">{attr.style}</span>}
-          {attr.cask && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700">{attr.cask}</span>}
-          {attr.peat === '피트' && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[11px] text-orange-700">피트</span>}
+          {attr.cask && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700">🛢 {attr.cask}</span>}
+          {oakFromCask(attr.cask) && <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-[11px] text-yellow-800" title="캐스크 기반 추론">🌳 {oakFromCask(attr.cask)}</span>}
+          {attr.peat && <span className={`rounded px-1.5 py-0.5 text-[11px] ${attr.peat === '피트' ? 'bg-orange-100 text-orange-700' : 'bg-neutral-100 text-neutral-500'}`}>{attr.peat}</span>}
+          {attr.peat_ppm != null && attr.peat_ppm > 0 && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[11px] font-medium text-orange-700">🔥 {attr.peat_ppm} ppm</span>}
+          {attr.sherry_type && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700" title={sherryInfoOf(attr.sherry_type) ? `당도 ${sherryInfoOf(attr.sherry_type)!.sweet} · 향 ${sherryInfoOf(attr.sherry_type)!.aroma}` : ''}>🍇 {attr.sherry_type}{sherryInfoOf(attr.sherry_type) ? ` · ${sherryInfoOf(attr.sherry_type)!.sweet}` : ''}</span>}
           {attr.volume && <span className="text-[11px] text-neutral-400">{attr.volume}ml</span>}
         </div>
         <div className="mt-2 text-sm text-neutral-600">최저 <b className="text-neutral-900">{won(mn)}</b> · 평균 {won(avg)} · 최고 {won(mx)} <span className="text-xs text-neutral-400">({det.length}건)</span></div>
@@ -150,19 +250,29 @@ export default function PricesPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold text-neutral-900">🏷️ 시세</h1>
-          <p className="mt-1 text-sm text-neutral-500">주류명별 최신 시세 1건. 주류명을 누르면 해당 술의 일자×장소 전체 가격표. 데이터=구글시트 [주류시세].</p>
+          <p className="mt-1 text-sm text-neutral-500">주류명별 최신 시세 1건. 주류명을 누르면 해당 술의 일자×장소 전체 가격표. 조회=DB(liquor_price) · 소스=구글시트[주류시세]([시트 동기화]로 반영).</p>
         </div>
-        <button
-          onClick={() => void load(true)}
-          disabled={syncing}
-          title="구글시트[주류시세]를 다시 읽어 DB(liquor_price)에 반영합니다"
-          className="mt-1 shrink-0 inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-amber-300 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {syncing ? '⏳ 동기화 중…' : '🔄 시트 동기화'}
-        </button>
+        <div className="mt-1 flex shrink-0 flex-col gap-1.5">
+          <button
+            onClick={() => void sync()}
+            disabled={syncing}
+            title="구글시트[주류시세]를 다시 읽어 DB(liquor_price)에 반영합니다"
+            className="inline-flex items-center justify-center gap-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-amber-300 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {syncing ? '⏳ 동기화 중…' : '🔄 시트 동기화'}
+          </button>
+          <button
+            onClick={() => void syncDailyshot()}
+            disabled={syncing}
+            title="데일리샷메타(위스키 품목) 대표가를 오늘자 시세로 반영합니다"
+            className="inline-flex items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {syncing ? '⏳ …' : '🥃 데일리샷 동기화'}
+          </button>
+        </div>
       </div>
       {syncMsg && (
-        <p className={`mt-2 text-xs ${syncMsg.startsWith('동기화 실패') ? 'text-red-600' : 'text-emerald-600'}`}>{syncMsg}</p>
+        <p className={`mt-2 text-xs ${syncMsg.includes('실패') ? 'text-red-600' : 'text-emerald-600'}`}>{syncMsg}</p>
       )}
 
       {/* 필터 */}
@@ -196,10 +306,11 @@ export default function PricesPage() {
         </div>
         <div className="mt-2 flex items-center gap-1.5">
           <span className="text-[11px] text-neutral-500">정렬:</span>
-          {sortBtn('price', '가격')}{sortBtn('name', '이름')}{sortBtn('date', '일자')}
+          {sortBtn('price', '가격')}{sortBtn('name', '이름')}{sortBtn('date', '일자')}{sortBtn('count', '시세수')}
           <span className="ml-auto text-[11px] text-neutral-500">{rows.length}종 · 전체 {prices.length}건</span>
         </div>
       </div>
+
 
       {/* 목록 */}
       <div className="mt-4 space-y-1.5">
@@ -215,7 +326,8 @@ export default function PricesPage() {
                   {p.liquor && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-600">{p.liquor}</span>}
                   {p.style && <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-600">{p.style}</span>}
                   {p.cask && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700">{p.cask}</span>}
-                  {p.peat === '피트' && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[11px] text-orange-700">피트</span>}
+                  {p.peat === '피트' && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[11px] text-orange-700">피트{p.peat_ppm ? ` 🔥${p.peat_ppm}` : ''}</span>}
+                  {p.sherry_type && p.sherry_type !== '없음' && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] text-rose-700">🍇 {p.sherry_type}</span>}
                 </div>
                 <div className="mt-0.5 text-xs text-neutral-500">
                   {p.shop || '상점미상'}{p.volume ? ` · ${p.volume}ml` : ''}{p.date ? ` · ${p.date}` : ''}
@@ -223,6 +335,7 @@ export default function PricesPage() {
                   {p.memo && <span className="text-neutral-400"> · {p.memo}</span>}
                 </div>
               </div>
+              <span className="shrink-0 text-right text-xs font-semibold tabular-nums text-neutral-400" title="시세(일자별 가격) 개수">{cntByName.get(p.name) ?? 1}</span>
               <div className="shrink-0 text-right">
                 <div className="text-sm font-bold text-neutral-900">{won(p.price)}</div>
                 {perMl && <div className="text-[10px] text-neutral-400">{perMl.toLocaleString()}원/ml</div>}

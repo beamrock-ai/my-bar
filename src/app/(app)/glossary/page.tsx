@@ -28,6 +28,8 @@ export default function GlossaryPage() {
     setTerms(d.terms ?? [])
   }, [])
   useEffect(() => { void load() }, [load])
+  // ?q= 파라미터로 초기 검색어 세팅(노트 특성 키워드 → 용어사전 링크)
+  useEffect(() => { const p = new URLSearchParams(window.location.search).get('q'); if (p) setQ(p) }, [])
 
   const categories = useMemo(() => Array.from(new Set(terms.map((t) => t.category).filter(Boolean))) as string[], [terms])
   const filtered = useMemo(() => {
