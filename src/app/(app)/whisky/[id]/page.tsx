@@ -35,7 +35,6 @@ const FORMS: { v: string; label: string; emoji: string }[] = [
   { v: 'miniature', label: 'Miniature', emoji: '🍶' },
 ]
 const formOf = (v: string | null) => FORMS.find((f) => f.v === v) ?? FORMS[0]
-type Obs = { id: string; price: number; observed_on: string | null; shop: { name: string } | null }
 type WImage = { id: string; url: string; is_primary: boolean }
 
 const COLORS = ['#fbf3d9', '#f6e5a8', '#efd479', '#e7bf50', '#dda838', '#cf8f27', '#bd781c', '#a56316', '#894f11', '#6b3d0d']
@@ -55,7 +54,7 @@ export default function WhiskyDetail() {
   const [activeId, setActiveId] = useState('')
   const [p, setP] = useState<Profile | null>(null)
   const [buys, setBuys] = useState<Purchase[]>([])
-  const [obs, setObs] = useState<Obs[]>([])
+  const [sise, setSise] = useState<{ price: number; date: string; shop: string | null }[]>([]) // 매칭된 시세 관측치
   const [images, setImages] = useState<WImage[]>([])
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeMsg, setAnalyzeMsg] = useState('')
@@ -70,7 +69,6 @@ export default function WhiskyDetail() {
   const [regen, setRegen] = useState(false)
   const [pForm, setPForm] = useState({ date: '', shop: '', form: 'bottle', list: '', price: '', volume: '' })
   const [editBuy, setEditBuy] = useState<{ id: string; date: string; shop: string; form: string; list: string; price: string; volume: string } | null>(null)
-  const [oForm, setOForm] = useState({ shop: '', price: '', volume: '', url: '' })
   const [adding, setAdding] = useState(false)
   const [opts, setOpts] = useState<{ price: string[]; volume: string[] }>({ price: [], volume: [] })
   const [optMgr, setOptMgr] = useState(false) // 프리셋 관리 UI 토글
@@ -86,7 +84,7 @@ export default function WhiskyDetail() {
 
   const load = useCallback(async (preferAuthor?: string) => {
     const d = await (await fetch(`${BP}/api/whisky/${id}`)).json()
-    setW(d.whisky); setBuys(d.purchases ?? []); setObs(d.observations ?? []); setImages(d.images ?? []); setHistory(d.history ?? [])
+    setW(d.whisky); setBuys(d.purchases ?? []); setImages(d.images ?? []); setHistory(d.history ?? [])
     setAbvStr(d.whisky?.abv != null ? String(d.whisky.abv) : '')
     setVolStr(d.whisky?.volume_ml != null ? String(d.whisky.volume_ml) : '')
     setPpmStr(d.whisky?.peat_ppm != null ? String(d.whisky.peat_ppm) : '')
@@ -109,6 +107,14 @@ export default function WhiskyDetail() {
       try { const j = await (await fetch(`${BP}/api/catalog`, { cache: 'no-store' })).json(); setCatalog((j.catalog ?? []).map((c: { name: string }) => c.name)) } catch { /* ignore */ }
     })()
   }, [])
+  // 매칭된 시세 관측치 로드(최저/평균/최고 계산용). price_name(수동) 우선, 없으면 한글명.
+  useEffect(() => {
+    const mName = (w?.price_name || w?.name_ko || w?.name_en || '').trim()
+    if (!mName) { setSise([]); return }
+    void (async () => {
+      try { const j = await (await fetch(`${BP}/api/prices/by-name?name=${encodeURIComponent(mName)}`, { cache: 'no-store' })).json(); setSise(j.prices ?? []) } catch { setSise([]) }
+    })()
+  }, [w?.price_name, w?.name_ko, w?.name_en])
   const addOpt = async (field: 'price' | 'volume') => {
     const value = newOpt[field].replace(/[^0-9]/g, '')
     if (!value) return
@@ -123,7 +129,7 @@ export default function WhiskyDetail() {
   // 구매/시세/이미지(객관) 변경 후 — 활성 프로필 편집상태는 보존
   const reloadObjective = async () => {
     const d = await (await fetch(`${BP}/api/whisky/${id}`)).json()
-    setBuys(d.purchases ?? []); setObs(d.observations ?? []); setImages(d.images ?? [])
+    setBuys(d.purchases ?? []); setImages(d.images ?? [])
     setW((prev) => (prev ? { ...prev, image_url: d.whisky?.image_url ?? null } : prev))
   }
 
@@ -228,12 +234,6 @@ export default function WhiskyDetail() {
       setEditBuy(null); await reloadObjective()
     } finally { setAdding(false) }
   }
-  const addObs = async () => {
-    if (!oForm.price) { alert('가격을 입력하세요'); return }
-    setAdding(true)
-    try { await fetch(`${BP}/api/price-observation`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whisky_id: id, shop_name: oForm.shop, price: oForm.price, volume_ml: oForm.volume, url: oForm.url }) }); setOForm({ shop: '', price: '', volume: '', url: '' }); await reloadObjective() } finally { setAdding(false) }
-  }
-  const delObs = async (oid: string) => { await fetch(`${BP}/api/price-observation`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: oid }) }); await reloadObjective() }
   // 여러 장 순차 업로드(대표사진 판정 레이스 방지) 후 1회 갱신
   const uploadImgs = async (files: File[]) => {
     if (!files.length) return
@@ -266,19 +266,16 @@ export default function WhiskyDetail() {
 
   if (!w) return <div className="text-sm text-neutral-400">불러오는 중...</div>
 
-  const priceRecs: { price: number; when: string | null; shop: string | null }[] = [
-    ...obs.map((o) => ({ price: o.price, when: o.observed_on, shop: o.shop?.name ?? null })),
-    ...buys.filter((b) => b.price != null).map((b) => ({ price: b.price as number, when: b.purchase_date, shop: b.shop?.name ?? null })),
-  ]
-  const minRec = priceRecs.length ? priceRecs.reduce((a, b) => (b.price < a.price ? b : a)) : null
-  const maxRec = priceRecs.length ? priceRecs.reduce((a, b) => (b.price > a.price ? b : a)) : null
-  const avg = priceRecs.length ? Math.round(priceRecs.reduce((s, r) => s + r.price, 0) / priceRecs.length) : null
+  // 가격 통계 = 매칭된 시세(sise)의 최저/평균/최고 (노트에서 직접 시세 추가는 폐지)
+  const siseMin = sise.length ? sise.reduce((a, b) => (b.price < a.price ? b : a)) : null
+  const siseMax = sise.length ? sise.reduce((a, b) => (b.price > a.price ? b : a)) : null
+  const avg = sise.length ? Math.round(sise.reduce((s, r) => s + r.price, 0) / sise.length) : null
+  const sctx = (r: { date: string; shop: string | null } | null) => (r ? [r.date, r.shop].filter(Boolean).join(', ') : '')
   const latest = buys[0]
   // 노트↔시세 매칭: price_name(수동) 우선, 없으면 name_ko. 카탈로그(시세)에 동일 nkey 있으면 연결됨.
   const nkey = (s: string) => (s ?? '').replace(/\s+/g, '')
   const matchName = (w.price_name || w.name_ko || w.name_en || '').trim()
   const matchedName = matchName ? (catalog.find((c) => nkey(c) === nkey(matchName)) ?? null) : null
-  const pctx = (r: { when: string | null; shop: string | null } | null) => (r ? [r.when, r.shop].filter(Boolean).join(', ') : '')
   const primaryImg = images.find((i) => i.is_primary) ?? images[0] ?? null
   const lbl = 'text-[11px] font-medium text-amber-700/70 shrink-0'
   const box = 'rounded-lg border border-amber-100 bg-white'
@@ -414,23 +411,15 @@ export default function WhiskyDetail() {
           </div>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-          <div className={`${box} p-2`}><div className="text-amber-700/60">최저가</div><div className="mt-0.5 font-semibold text-neutral-800">{won(minRec?.price)}</div>{minRec && <div className="text-[10px] text-neutral-400">{pctx(minRec)}</div>}</div>
+          <div className={`${box} p-2`}><div className="text-amber-700/60">최저가</div><div className="mt-0.5 font-semibold text-neutral-800">{won(siseMin?.price)}</div>{siseMin && <div className="text-[10px] text-neutral-400">{sctx(siseMin)}</div>}</div>
           <div className={`${box} p-2`}><div className="text-amber-700/60">평균가</div><div className="mt-0.5 font-semibold text-neutral-800">{won(avg)}</div></div>
-          <div className={`${box} p-2`}><div className="text-amber-700/60">최고가</div><div className="mt-0.5 font-semibold text-neutral-800">{won(maxRec?.price)}</div>{maxRec && <div className="text-[10px] text-neutral-400">{pctx(maxRec)}</div>}</div>
+          <div className={`${box} p-2`}><div className="text-amber-700/60">최고가</div><div className="mt-0.5 font-semibold text-neutral-800">{won(siseMax?.price)}</div>{siseMax && <div className="text-[10px] text-neutral-400">{sctx(siseMax)}</div>}</div>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="text-[11px] font-medium text-amber-700/70">＋ 시세</span>
-          <input value={oForm.shop} onChange={(e) => setOForm({ ...oForm, shop: e.target.value })} placeholder="상점" className="w-24 rounded border border-neutral-200 px-2 py-1" />
-          <input value={oForm.price} onChange={(e) => setOForm({ ...oForm, price: e.target.value })} placeholder="가격" type="number" className="w-24 rounded border border-neutral-200 px-2 py-1" />
-          <input value={oForm.volume} onChange={(e) => setOForm({ ...oForm, volume: e.target.value })} placeholder="용량ml" type="number" className="w-20 rounded border border-neutral-200 px-2 py-1" />
-          <input value={oForm.url} onChange={(e) => setOForm({ ...oForm, url: e.target.value })} placeholder="링크(선택)" className="w-28 rounded border border-neutral-200 px-2 py-1" />
-          <button onClick={addObs} disabled={adding} className="rounded bg-neutral-700 px-2.5 py-1 text-white hover:bg-neutral-800 disabled:opacity-50">추가</button>
-        </div>
-        {obs.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {obs.map((o) => <span key={o.id} className="inline-flex items-center gap-1 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">{o.shop?.name ?? ''} {won(o.price)}{o.observed_on ? ` (${o.observed_on})` : ''}<button onClick={() => delObs(o.id)} className="text-neutral-300 hover:text-red-500">✕</button></span>)}
-          </div>
-        )}
+        <p className="mt-1.5 text-[11px] text-neutral-400">
+          {sise.length > 0
+            ? <>시세 {sise.length}건 기준 (연결: {matchedName}). 개별 내역·수동 추가는 <Link href={`/prices?name=${encodeURIComponent(matchedName ?? matchName)}`} className="text-amber-600 hover:underline">시세 화면</Link>에서.</>
+            : matchName ? <>연결된 시세 없음 — 위 <b>시세매칭</b>에서 품목을 연결하면 최저/평균/최고가가 표시됩니다.</> : <>한글명/시세매칭을 설정하면 시세 통계가 표시됩니다.</>}
+        </p>
         <div className="mt-3">
           <div className="mb-1 flex items-center gap-2"><span className="text-xs font-semibold text-amber-800">구매 기록</span><span className="text-[11px] text-neutral-400">구매 {buys.filter((b) => (b.form ?? 'bottle') === 'bottle').length}회 · 시음 {buys.filter((b) => (b.form ?? 'bottle') !== 'bottle').length}회</span></div>
           <datalist id="price-opts"><option value="free" />{opts.price.map((v) => <option key={v} value={v} />)}</datalist>
