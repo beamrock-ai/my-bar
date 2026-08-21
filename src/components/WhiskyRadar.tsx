@@ -3,9 +3,9 @@ const AXES: [string, string, string][] = [
   ['cereal', 'Cereal', '곡물'],
   ['fruity', 'Fruity', '과일'],
   ['floral', 'Floral', '꽃향'],
-  ['peaty', 'Peaty', '피트'],
+  ['peaty', 'Peaty/Smoky', '피트'],
   ['woody', 'Woody', '우디'],
-  ['winey', 'Winey', '와인'],
+  ['winey', 'Winey/Sherry', '와인'],
 ]
 const CX = 110, CY = 122, R = 74, MAX = 4
 
@@ -29,7 +29,7 @@ export default function WhiskyRadar({
   const hasData = !!values && AXES.some(([k]) => (values[k] ?? 0) > 0)
 
   return (
-    <svg viewBox="-14 0 248 240" className="w-full max-w-[240px]">
+    <svg viewBox="-22 0 264 240" className="w-full max-w-[250px]">
       <text x={CX} y={12} textAnchor="middle" className="fill-neutral-600" fontSize={11} fontWeight={600}>{title}</text>
       {grid.map((g, i) => (
         <polygon key={i} points={g} fill="none" stroke="#e5e5e5" strokeWidth={0.7} />
