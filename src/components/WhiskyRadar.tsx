@@ -1,10 +1,10 @@
 // 위스키 향/맛 6축 레이더 (SVG, 의존성 없음). [키, 영문, 한글]
 const AXES: [string, string, string][] = [
-  ['cereal', 'Cereal', '곡물'],
+  ['cereal', 'Cereal/Malty', '곡물'],
   ['fruity', 'Fruity', '과일'],
   ['floral', 'Floral', '꽃향'],
   ['peaty', 'Peaty/Smoky', '피트'],
-  ['woody', 'Woody', '우디'],
+  ['woody', 'Woody/Oaky', '우디'],
   ['winey', 'Winey/Sherry', '와인'],
 ]
 const CX = 110, CY = 122, R = 74, MAX = 4

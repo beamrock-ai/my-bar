@@ -627,7 +627,7 @@ export default function WhiskyDetail() {
   )
 }
 
-const RAXES: [string, string][] = [['cereal', 'Cereal (곡물)'], ['fruity', 'Fruity (과일)'], ['floral', 'Floral (꽃향)'], ['peaty', 'Peaty/Smoky (피트)'], ['woody', 'Woody (우디)'], ['winey', 'Winey/Sherry (와인)']]
+const RAXES: [string, string][] = [['cereal', 'Cereal/Malty (곡물)'], ['fruity', 'Fruity (과일)'], ['floral', 'Floral (꽃향)'], ['peaty', 'Peaty/Smoky (피트)'], ['woody', 'Woody/Oaky (우디)'], ['winey', 'Winey/Sherry (와인)']]
 function RadarSliders({ values, onChange, color }: { values: Radar | null; onChange: (v: Radar) => void; color: string }) {
   const v = values ?? {}
   const setAxis = (k: string, n: number) => onChange({ ...(RAXES.reduce((a, [key]) => ({ ...a, [key]: v[key] ?? 0 }), {} as Radar)), [k]: n })
