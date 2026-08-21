@@ -627,7 +627,7 @@ export default function WhiskyDetail() {
   )
 }
 
-const RAXES: [string, string][] = [['cereal', '곡물'], ['fruity', '과일'], ['floral', '꽃향'], ['peaty', '피트'], ['feinty', '페인티'], ['sulphur', '유황'], ['woody', '우디'], ['winey', '와인']]
+const RAXES: [string, string][] = [['cereal', 'Cereal (곡물)'], ['fruity', 'Fruity (과일)'], ['floral', 'Floral (꽃향)'], ['peaty', 'Peaty (피트)'], ['woody', 'Woody (우디)'], ['winey', 'Winey (와인)']]
 function RadarSliders({ values, onChange, color }: { values: Radar | null; onChange: (v: Radar) => void; color: string }) {
   const v = values ?? {}
   const setAxis = (k: string, n: number) => onChange({ ...(RAXES.reduce((a, [key]) => ({ ...a, [key]: v[key] ?? 0 }), {} as Radar)), [k]: n })
@@ -635,7 +635,7 @@ function RadarSliders({ values, onChange, color }: { values: Radar | null; onCha
     <div className="mt-1 space-y-0.5 px-1">
       {RAXES.map(([k, lab]) => (
         <label key={k} className="flex items-center gap-2 text-[11px]">
-          <span className="w-8 shrink-0 text-neutral-500">{lab}</span>
+          <span className="w-24 shrink-0 whitespace-nowrap text-neutral-500">{lab}</span>
           <input type="range" min={0} max={4} step={1} value={v[k] ?? 0} onChange={(e) => setAxis(k, Number(e.target.value))} className="h-1 flex-1 cursor-pointer" style={{ accentColor: color }} />
           <span className="w-3 text-right text-neutral-400">{v[k] ?? 0}</span>
         </label>

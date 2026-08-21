@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-export type Radar = { cereal: number; fruity: number; floral: number; peaty: number; feinty: number; sulphur: number; woody: number; winey: number }
+export type Radar = { cereal: number; fruity: number; floral: number; peaty: number; woody: number; winey: number }
 // 주종(최상위 분류) / 위스키 구분(세부 스타일). UI/LLM 공통.
 export const LIQUORS = ['위스키', '보드카', '진', '럼', '데킬라', '브랜디', '리큐르', '사케', '막걸리', '소주', '전통주', '와인', '맥주', '기타'] as const
 export const WHISKY_STYLES = ['싱글몰트', '블렌디드', '블렌디드몰트', '싱글그레인', '버번', '라이', '기타'] as const
@@ -42,7 +42,7 @@ function toRadar(o: unknown): Radar | null {
     const n = typeof v === 'number' ? v : parseFloat(String(v))
     return Number.isFinite(n) ? Math.max(0, Math.min(4, Math.round(n))) : 0
   }
-  return { cereal: g('cereal'), fruity: g('fruity'), floral: g('floral'), peaty: g('peaty'), feinty: g('feinty'), sulphur: g('sulphur'), woody: g('woody'), winey: g('winey') }
+  return { cereal: g('cereal'), fruity: g('fruity'), floral: g('floral'), peaty: g('peaty'), woody: g('woody'), winey: g('winey') }
 }
 
 // AI가 그래도 포괄어를 내면 세부 종류로 후처리 치환(사용자 선택 2). 조합("A+B")은 항목별 치환+중복제거.
@@ -89,8 +89,8 @@ export async function whiskyInfo(input: string): Promise<WhiskyInfo> {
             `"distillery": 증류소/양조장·지역(예: 아드벡, 아일라, 스코틀랜드), "abv": 도수 숫자만(%),\n` +
             `"description": 기본 설명 2~3문장,\n` +
             `"nose": 향, "palate": 맛(입안), "finish": 피니시(여운),\n` +
-            `"aroma": {"cereal":0~4,"fruity":0~4,"floral":0~4,"peaty":0~4,"feinty":0~4,"sulphur":0~4,"woody":0~4,"winey":0~4} (향 프로파일 강도),\n` +
-            `"flavour": {동일한 8개 키, 맛 프로파일 강도},\n` +
+            `"aroma": {"cereal":0~4,"fruity":0~4,"floral":0~4,"peaty":0~4,"woody":0~4,"winey":0~4} (향 프로파일 강도),\n` +
+            `"flavour": {동일한 6개 키, 맛 프로파일 강도},\n` +
             `"evaluation": 대체적 평가 1~2문장\n` +
             `}\n잘 모르는 제품이면 명칭 기준으로 추정하되 불확실하면 evaluation에 짧게 명시.`,
         },
