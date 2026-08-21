@@ -123,7 +123,8 @@
   - **시세 삭제/수동가격 + 데일리샷 품목ID 키(2026-08-19)**: 시세는 시트/데일리샷 동기화로 덮어써지므로 **동기화에 안전한 레이어**로 처리. (초안이던 별칭 병합/이름편집(`price_alias`)은 **삭제로 대체·제거**, 마이그레이션 `20260819110000_dailyshot_appid_hide.sql`에서 drop.)
     - **삭제(숨김)**: 목록 행 **체크박스** + 1종↑ 선택 시 **삭제 바**(`🗑 삭제`) → `POST /api/prices/delete {names}` = `hobby.price_hidden(name PK)`에 등록 + 현재 `liquor_price`·`liquor_price_manual` 행 즉시 삭제. **동기화가 숨김 이름을 재적재하지 않음**(`syncPricesToDB`·`syncDailyshotToDB`·`getPricesFromDB` 모두 hidden 제외). 복구=`DELETE /api/prices/delete`(숨김해제 → 다음 동기화 때 재적재, 수동가격은 복구 불가). 중복 품목 정리용(예: [조니워커 블랙 라벨]/[700ml] 중 하나 삭제).
     - **데일리샷 동기화 키 = 품목ID(app_id)**: `liquor_price.app_id` 컬럼 추가(기존 데일리샷 행 url `.../item/{id}`에서 백필). `syncDailyshotToDB`가 **상품명 아님 app_id 기준으로 dedup·변동비교·append**(품목ID별 시계열). (주류시세 시트/수동가격 행은 app_id 없음.)
-    - **수동 판매점 시세**: `hobby.liquor_price_manual`(일자·판매점·가격, 동기화 미터치). 드릴다운 **`＋ 판매점 시세 수동 입력`** → `POST/DELETE /api/prices/manual`. 추가분은 칩+✕삭제, 가격표/추이에 함께 반영. `getPricesFromDB`가 base+manual union, `PriceRow`에 `id·app_id·source`.
+    - **수동 판매점 시세**: `hobby.liquor_price_manual`(일자·판매점·가격, 동기화 미터치). 드릴다운 **`＋ 판매점 시세 수동 입력`** → `POST /api/prices/manual`. `getPricesFromDB`가 base+manual union, `PriceRow`에 `id·app_id·source`.
+    - **드릴다운 개별 시세 행 삭제(2026-08-19)**: 상세 화면 **`개별 시세 내역`** 리스트(det, 일자·판매점·소스뱃지[시트/데일리샷/수동]·가격, 체크박스) → **선택 삭제** → `DELETE /api/prices/row {liquorIds, manualIds}`(id 기준, 소스별 liquor_price/liquor_price_manual 분리 삭제). ⚠️시트/데일리샷 원본 행은 다음 동기화 때 재생 가능(항목 자체 제거는 목록의 삭제=price_hidden 사용). 수동가격 삭제도 여기서(기존 칩 UI 대체).
   - **[🍶 노트에 추가] / [📖 노트로 이동] 버튼**(드릴다운 헤더): 선택한 술이 **노트에 이미 등록돼 있으면 `📖 노트로 이동`(초록, `/whisky/{id}`로 이동)**, 미등록이면 `🍶 노트에 추가`(주황) 노출. 등록 여부는 노트 목록(`/api/whisky`)을 로드해 **한글명 띄어쓰기 제거(nkey) → id 맵**으로 판정(PK 규칙 동일). 추가(`POST /api/whisky`, `ifNew=1` → 이미 있으면 프로필 미덮어씀·`alreadyExists`) 성공 시 맵 재로드 → 즉시 [노트로 이동]으로 전환. 카탈로그 술이므로 주종·구분·캐스크·피트 자동 적용.
 
 ## 콜키지 `/corkage` (2026-07-24)

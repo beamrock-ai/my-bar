@@ -44,6 +44,7 @@ export default function PricesPage() {
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [mForm, setMForm] = useState({ date: '', shop: '', price: '' })
+  const [rowChecked, setRowChecked] = useState<Set<string>>(new Set()) // 상세: 선택된 개별 시세 행 id
 
   // 조회: DB(liquor_price)에서 읽음 (구글시트 직접 읽지 않음)
   const load = async () => {
@@ -130,18 +131,25 @@ export default function PricesPage() {
       await load()
     } finally { setBusy(false) }
   }
-  const delManual = async (id: string) => {
-    if (busy) return
+  // 상세: 선택한 개별 시세 관측 행 삭제(id 기준, 소스별로 분리)
+  const toggleRow = (id: string) => setRowChecked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const deleteRows = async () => {
+    if (rowChecked.size === 0 || busy) return
+    const rows = (prices ?? []).filter((p) => p.id && rowChecked.has(p.id))
+    const liquorIds = rows.filter((p) => p.source !== 'manual').map((p) => p.id as string)
+    const manualIds = rows.filter((p) => p.source === 'manual').map((p) => p.id as string)
+    if (!confirm(`선택한 시세 ${rowChecked.size}건을 삭제할까요?\n(시트/데일리샷 행은 다음 동기화 때 다시 생길 수 있음)`)) return
     setBusy(true)
     try {
-      await fetch(`${BP}/api/prices/manual`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+      await fetch(`${BP}/api/prices/row`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ liquorIds, manualIds }) })
+      setRowChecked(new Set())
       await load()
     } finally { setBusy(false) }
   }
 
   const [pendingName, setPendingName] = useState<string | null>(null) // ?name= 딥링크(노트→시세)
   useEffect(() => { void load(); void loadNotes(); setPendingName(new URLSearchParams(window.location.search).get('name')) }, [])
-  useEffect(() => { setAddMsg(''); setMForm({ date: '', shop: '', price: '' }) }, [selected])
+  useEffect(() => { setAddMsg(''); setMForm({ date: '', shop: '', price: '' }); setRowChecked(new Set()) }, [selected])
   // 시세 로드 후 딥링크 적용: PK(띄어쓰기 제거) 일치 술이 있으면 드릴다운 열고, 없으면 검색어로
   useEffect(() => {
     if (!pendingName || !prices) return
@@ -280,6 +288,28 @@ export default function PricesPage() {
             ))}
           </div>
         )}
+        {/* 개별 시세 내역(체크 후 선택 삭제) */}
+        <div className="mt-3">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-xs font-semibold text-neutral-600">개별 시세 내역 ({det.length})</span>
+            {rowChecked.size > 0 && (<>
+              <button onClick={deleteRows} disabled={busy} className="rounded-md bg-red-600 px-2.5 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-40">🗑 선택 {rowChecked.size}건 삭제</button>
+              <button onClick={() => setRowChecked(new Set())} className="text-[11px] text-neutral-400 hover:underline">해제</button>
+            </>)}
+          </div>
+          <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border border-neutral-200 p-1.5">
+            {[...det].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map((d) => (
+              <label key={d.id} className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-neutral-50">
+                <input type="checkbox" checked={!!d.id && rowChecked.has(d.id)} onChange={() => d.id && toggleRow(d.id)} className="h-3.5 w-3.5 shrink-0 accent-red-600" />
+                <span className="w-[76px] shrink-0 tabular-nums text-neutral-500">{d.date || '-'}</span>
+                <span className="min-w-0 flex-1 truncate text-neutral-700">{d.shop || '상점미상'}</span>
+                <span className={`shrink-0 rounded px-1 text-[10px] ${d.source === 'manual' ? 'bg-amber-50 text-amber-600' : d.source === 'dailyshot' ? 'bg-rose-50 text-rose-600' : 'bg-neutral-100 text-neutral-500'}`}>{d.source === 'manual' ? '수동' : d.source === 'dailyshot' ? '데일리샷' : '시트'}</span>
+                <span className="w-20 shrink-0 text-right font-semibold tabular-nums text-neutral-800">{won(d.price)}</span>
+                {d.url && <a href={d.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="shrink-0 text-amber-600">🔗</a>}
+              </label>
+            ))}
+          </div>
+        </div>
         {/* 수동 판매점 시세 입력(일자·판매점·가격) — 동기화에 지워지지 않음 */}
         <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50/60 p-3">
           <p className="text-xs font-semibold text-neutral-600">＋ 판매점 시세 수동 입력</p>
@@ -289,16 +319,7 @@ export default function PricesPage() {
             <input value={mForm.price} onChange={(e) => setMForm({ ...mForm, price: e.target.value })} placeholder="가격" inputMode="numeric" className="w-24 rounded-md border border-neutral-200 px-2 py-1 text-sm" />
             <button onClick={addManual} disabled={busy || !mForm.price.trim()} className="rounded-md bg-amber-600 px-3 py-1 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-40">추가</button>
           </div>
-          {det.some((d) => d.source === 'manual') && (
-            <div className="mt-2 flex flex-wrap gap-1">
-              {det.filter((d) => d.source === 'manual').map((d) => (
-                <span key={d.id} className="inline-flex items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-600 ring-1 ring-neutral-200">
-                  {d.shop || '상점미상'} {won(d.price)}{d.date ? ` (${d.date})` : ''}
-                  <button onClick={() => d.id && delManual(d.id)} title="삭제" className="text-neutral-300 hover:text-red-500">✕</button>
-                </span>
-              ))}
-            </div>
-          )}
+          <p className="mt-1 text-[11px] text-neutral-400">추가한 항목은 위 &apos;개별 시세 내역&apos;에서 선택해 삭제할 수 있어요.</p>
         </div>
         <button onClick={() => setSelected(null)} className="mt-4 inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-amber-300 hover:bg-amber-50">← 주류시세 목록으로</button>
       </div>
