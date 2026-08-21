@@ -7,6 +7,7 @@ const DS_SHOP = '데일리샷' // 데일리샷 시세는 별도 소스(데일리
 export type PriceRow = {
   liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; sherry_type: string
   name: string; shop: string; price: number; date: string; volume: number | null; url: string; memo: string
+  id?: string; source?: 'sheet' | 'dailyshot' | 'manual' // 조회 경로에서만 채움(병합/수동가격 처리용)
 }
 export type CatalogItem = { name: string; liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; sherry_type: string; volume: number | null; priceMin: number | null }
 
@@ -31,16 +32,35 @@ export async function getPrices(): Promise<PriceRow[]> {
     }))
 }
 
-// webapp 조회용: DB(liquor_price)에서 읽음. (구글시트는 소스 → 동기화로만 DB에 반영)
+// webapp 조회용: DB(liquor_price + 수동가격)에서 읽고, 이름 별칭(병합/개명)을 적용.
+// (구글시트는 소스 → 동기화로만 liquor_price에 반영. 별칭·수동가격은 동기화가 안 건드림)
 export async function getPricesFromDB(): Promise<PriceRow[]> {
   const db = createServiceClient()
-  const { data } = await db.from('liquor_price')
-    .select('liquor, style, cask, peat, peat_ppm, sherry_type, name, shop, price, observed_on, volume_ml, url, memo')
-  return (data ?? []).map((r) => ({
+  const [{ data: base }, { data: manual }, { data: aliases }] = await Promise.all([
+    db.from('liquor_price').select('id, liquor, style, cask, peat, peat_ppm, sherry_type, name, shop, price, observed_on, volume_ml, url, memo'),
+    db.from('liquor_price_manual').select('id, name, shop, price, observed_on, volume_ml, url, memo'),
+    db.from('price_alias').select('from_name, to_name'),
+  ])
+  // 이름 별칭 전이 해석(A→B→C ⇒ A는 C로)
+  const aliasMap = new Map<string, string>((aliases ?? []).map((a) => [a.from_name as string, a.to_name as string]))
+  const resolve = (name: string) => {
+    let n = name; const seen = new Set<string>()
+    while (aliasMap.has(n) && !seen.has(n)) { seen.add(n); n = aliasMap.get(n)! }
+    return n
+  }
+  const baseRows: PriceRow[] = (base ?? []).map((r) => ({
+    id: r.id as string, source: (r.shop === DS_SHOP ? 'dailyshot' : 'sheet') as PriceRow['source'],
     liquor: r.liquor ?? '', style: r.style ?? '', cask: normalizeCask(r.cask ?? '') ?? '', peat: r.peat ?? '', peat_ppm: r.peat_ppm ?? null, sherry_type: r.sherry_type ?? '',
-    name: r.name, shop: r.shop ?? '', price: r.price ?? 0,
+    name: resolve(r.name), shop: r.shop ?? '', price: r.price ?? 0,
     date: r.observed_on ?? '', volume: r.volume_ml ?? null, url: r.url ?? '', memo: r.memo ?? '',
   }))
+  const manualRows: PriceRow[] = (manual ?? []).map((r) => ({
+    id: r.id as string, source: 'manual' as const,
+    liquor: '', style: '', cask: '', peat: '', peat_ppm: null, sherry_type: '',
+    name: resolve(r.name), shop: r.shop ?? '', price: r.price ?? 0,
+    date: r.observed_on ?? '', volume: r.volume_ml ?? null, url: r.url ?? '', memo: r.memo ?? '',
+  }))
+  return [...baseRows, ...manualRows]
 }
 
 // 소스(구글시트[주류시세]) → DB(liquor_price) 동기화(전체 교체, 단 데일리샷 행은 보존). 반환=적재 건수

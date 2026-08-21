@@ -21,6 +21,7 @@ function oakFromCask(cask: string): string {
 type Price = {
   liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; sherry_type: string
   name: string; shop: string; price: number; date: string; volume: number | null; url: string; memo: string
+  id?: string; source?: 'sheet' | 'dailyshot' | 'manual'
 }
 type SortKey = 'price' | 'name' | 'date' | 'count'
 
@@ -39,6 +40,12 @@ export default function PricesPage() {
   const [adding, setAdding] = useState(false)
   const [addMsg, setAddMsg] = useState('')
   const [noteMap, setNoteMap] = useState<Map<string, string>>(new Map()) // 정규화된 한글명 → 노트 id
+  // 병합(체크박스) · 상세 편집(이름/수동가격)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [mergeKeep, setMergeKeep] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [mForm, setMForm] = useState({ date: '', shop: '', price: '' })
 
   // 조회: DB(liquor_price)에서 읽음 (구글시트 직접 읽지 않음)
   const load = async () => {
@@ -99,9 +106,55 @@ export default function PricesPage() {
     } finally { setAdding(false) }
   }
 
+  const toggleCheck = (name: string) => setChecked((prev) => {
+    const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n
+  })
+  // 병합: 체크된 이름들을 유지이름(keep)으로 통합(별칭)
+  const doMerge = async () => {
+    const names = [...checked]
+    const keep = (mergeKeep && names.includes(mergeKeep)) ? mergeKeep : names[0]
+    const from = names.filter((n) => n !== keep)
+    if (!keep || from.length === 0 || busy) return
+    if (!confirm(`${from.map((n) => `[${n}]`).join(', ')} 을(를) [${keep}] 로 통합할까요?\n(되돌리기 가능)`)) return
+    setBusy(true)
+    try {
+      await fetch(`${BP}/api/prices/alias`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to: keep }) })
+      setChecked(new Set()); setMergeKeep('')
+      await load()
+    } finally { setBusy(false) }
+  }
+  // 이름 편집(별칭 개명): selected → editName
+  const renameSelected = async () => {
+    const to = editName.trim()
+    if (!selected || !to || to === selected || busy) return
+    setBusy(true)
+    try {
+      await fetch(`${BP}/api/prices/alias`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: selected, to }) })
+      await load(); setSelected(to)
+    } finally { setBusy(false) }
+  }
+  // 수동 판매점 시세 추가/삭제
+  const addManual = async () => {
+    if (!selected || !mForm.price.trim() || busy) return
+    setBusy(true)
+    try {
+      await fetch(`${BP}/api/prices/manual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: selected, shop: mForm.shop, price: mForm.price, observed_on: mForm.date }) })
+      setMForm({ date: '', shop: '', price: '' })
+      await load()
+    } finally { setBusy(false) }
+  }
+  const delManual = async (id: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await fetch(`${BP}/api/prices/manual`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+      await load()
+    } finally { setBusy(false) }
+  }
+
   const [pendingName, setPendingName] = useState<string | null>(null) // ?name= 딥링크(노트→시세)
   useEffect(() => { void load(); void loadNotes(); setPendingName(new URLSearchParams(window.location.search).get('name')) }, [])
-  useEffect(() => { setAddMsg('') }, [selected])
+  useEffect(() => { setAddMsg(''); setEditName(selected ?? ''); setMForm({ date: '', shop: '', price: '' }) }, [selected])
   // 시세 로드 후 딥링크 적용: PK(띄어쓰기 제거) 일치 술이 있으면 드릴다운 열고, 없으면 검색어로
   useEffect(() => {
     if (!pendingName || !prices) return
@@ -206,6 +259,12 @@ export default function PricesPage() {
           {attr.sherry_type && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700" title={sherryInfoOf(attr.sherry_type) ? `당도 ${sherryInfoOf(attr.sherry_type)!.sweet} · 향 ${sherryInfoOf(attr.sherry_type)!.aroma}` : ''}>🍇 {attr.sherry_type}{sherryInfoOf(attr.sherry_type) ? ` · ${sherryInfoOf(attr.sherry_type)!.sweet}` : ''}</span>}
           {attr.volume && <span className="text-[11px] text-neutral-400">{attr.volume}ml</span>}
         </div>
+        {/* 이름 편집(별칭 개명 — 동기화에도 유지) */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-56 rounded-md border border-neutral-200 px-2 py-1 text-sm" placeholder="이름" />
+          <button onClick={renameSelected} disabled={busy || !editName.trim() || editName.trim() === selected} className="rounded-md bg-neutral-700 px-3 py-1 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">이름 저장</button>
+          <span className="text-[11px] text-neutral-400">이름 변경은 별칭으로 저장(시트 동기화에도 유지)</span>
+        </div>
         <div className="mt-2 text-sm text-neutral-600">최저 <b className="text-neutral-900">{won(mn)}</b> · 평균 {won(avg)} · 최고 {won(mx)} <span className="text-xs text-neutral-400">({det.length}건)</span></div>
 
         {/* 일자별·판매점별 가격 추이 */}
@@ -240,6 +299,26 @@ export default function PricesPage() {
             ))}
           </div>
         )}
+        {/* 수동 판매점 시세 입력(일자·판매점·가격) — 동기화에 지워지지 않음 */}
+        <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50/60 p-3">
+          <p className="text-xs font-semibold text-neutral-600">＋ 판매점 시세 수동 입력</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <input type="date" value={mForm.date} onChange={(e) => setMForm({ ...mForm, date: e.target.value })} title="일자(미입력=오늘)" className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm text-neutral-700" />
+            <input value={mForm.shop} onChange={(e) => setMForm({ ...mForm, shop: e.target.value })} placeholder="판매점" className="w-28 rounded-md border border-neutral-200 px-2 py-1 text-sm" />
+            <input value={mForm.price} onChange={(e) => setMForm({ ...mForm, price: e.target.value })} placeholder="가격" inputMode="numeric" className="w-24 rounded-md border border-neutral-200 px-2 py-1 text-sm" />
+            <button onClick={addManual} disabled={busy || !mForm.price.trim()} className="rounded-md bg-amber-600 px-3 py-1 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-40">추가</button>
+          </div>
+          {det.some((d) => d.source === 'manual') && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {det.filter((d) => d.source === 'manual').map((d) => (
+                <span key={d.id} className="inline-flex items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-600 ring-1 ring-neutral-200">
+                  {d.shop || '상점미상'} {won(d.price)}{d.date ? ` (${d.date})` : ''}
+                  <button onClick={() => d.id && delManual(d.id)} title="삭제" className="text-neutral-300 hover:text-red-500">✕</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
         <button onClick={() => setSelected(null)} className="mt-4 inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-amber-300 hover:bg-amber-50">← 주류시세 목록으로</button>
       </div>
     )
@@ -311,6 +390,18 @@ export default function PricesPage() {
         </div>
       </div>
 
+      {/* 병합 바(2종 이상 체크 시) */}
+      {checked.size >= 2 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <span className="text-xs font-semibold text-amber-700">{checked.size}종 선택</span>
+          <span className="text-[11px] text-amber-600">유지할 이름</span>
+          <select value={(mergeKeep && checked.has(mergeKeep)) ? mergeKeep : [...checked][0]} onChange={(e) => setMergeKeep(e.target.value)} className="max-w-[220px] rounded-md border border-amber-300 bg-white px-2 py-1 text-xs">
+            {[...checked].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <button onClick={doMerge} disabled={busy} className="rounded-md bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-40">병합</button>
+          <button onClick={() => { setChecked(new Set()); setMergeKeep('') }} className="text-[11px] text-amber-500 hover:underline">선택해제</button>
+        </div>
+      )}
 
       {/* 목록 */}
       <div className="mt-4 space-y-1.5">
@@ -319,6 +410,7 @@ export default function PricesPage() {
           const perMl = p.volume ? Math.round(p.price / p.volume) : null
           return (
             <div key={i} className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
+              <input type="checkbox" checked={checked.has(p.name)} onChange={() => toggleCheck(p.name)} title="병합 선택" className="shrink-0 h-4 w-4 accent-amber-600" />
               <span className="w-6 shrink-0 text-center text-sm font-bold tabular-nums text-neutral-300">{i + 1}</span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
