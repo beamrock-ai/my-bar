@@ -40,11 +40,9 @@ export default function PricesPage() {
   const [adding, setAdding] = useState(false)
   const [addMsg, setAddMsg] = useState('')
   const [noteMap, setNoteMap] = useState<Map<string, string>>(new Map()) // 정규화된 한글명 → 노트 id
-  // 병합(체크박스) · 상세 편집(이름/수동가격)
+  // 삭제(체크박스) · 상세 수동가격
   const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [mergeKeep, setMergeKeep] = useState('')
   const [busy, setBusy] = useState(false)
-  const [editName, setEditName] = useState('')
   const [mForm, setMForm] = useState({ date: '', shop: '', price: '' })
 
   // 조회: DB(liquor_price)에서 읽음 (구글시트 직접 읽지 않음)
@@ -109,28 +107,17 @@ export default function PricesPage() {
   const toggleCheck = (name: string) => setChecked((prev) => {
     const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n
   })
-  // 병합: 체크된 이름들을 유지이름(keep)으로 통합(별칭)
-  const doMerge = async () => {
+  // 삭제(숨김): 체크된 이름들을 제거. 동기화에도 재적재 안 됨(price_hidden).
+  const doDelete = async () => {
     const names = [...checked]
-    const keep = (mergeKeep && names.includes(mergeKeep)) ? mergeKeep : names[0]
-    const from = names.filter((n) => n !== keep)
-    if (!keep || from.length === 0 || busy) return
-    if (!confirm(`${from.map((n) => `[${n}]`).join(', ')} 을(를) [${keep}] 로 통합할까요?\n(되돌리기 가능)`)) return
+    if (names.length === 0 || busy) return
+    if (!confirm(`${names.map((n) => `[${n}]`).join(', ')} ${names.length}종을 삭제할까요?\n동기화해도 다시 나타나지 않습니다. (시세 메뉴에서 복구 가능)`)) return
     setBusy(true)
     try {
-      await fetch(`${BP}/api/prices/alias`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to: keep }) })
-      setChecked(new Set()); setMergeKeep('')
+      await fetch(`${BP}/api/prices/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) })
+      setChecked(new Set())
+      if (selected && names.includes(selected)) setSelected(null)
       await load()
-    } finally { setBusy(false) }
-  }
-  // 이름 편집(별칭 개명): selected → editName
-  const renameSelected = async () => {
-    const to = editName.trim()
-    if (!selected || !to || to === selected || busy) return
-    setBusy(true)
-    try {
-      await fetch(`${BP}/api/prices/alias`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: selected, to }) })
-      await load(); setSelected(to)
     } finally { setBusy(false) }
   }
   // 수동 판매점 시세 추가/삭제
@@ -154,7 +141,7 @@ export default function PricesPage() {
 
   const [pendingName, setPendingName] = useState<string | null>(null) // ?name= 딥링크(노트→시세)
   useEffect(() => { void load(); void loadNotes(); setPendingName(new URLSearchParams(window.location.search).get('name')) }, [])
-  useEffect(() => { setAddMsg(''); setEditName(selected ?? ''); setMForm({ date: '', shop: '', price: '' }) }, [selected])
+  useEffect(() => { setAddMsg(''); setMForm({ date: '', shop: '', price: '' }) }, [selected])
   // 시세 로드 후 딥링크 적용: PK(띄어쓰기 제거) 일치 술이 있으면 드릴다운 열고, 없으면 검색어로
   useEffect(() => {
     if (!pendingName || !prices) return
@@ -258,12 +245,6 @@ export default function PricesPage() {
           {attr.peat_ppm != null && attr.peat_ppm > 0 && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[11px] font-medium text-orange-700">🔥 {attr.peat_ppm} ppm</span>}
           {attr.sherry_type && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700" title={sherryInfoOf(attr.sherry_type) ? `당도 ${sherryInfoOf(attr.sherry_type)!.sweet} · 향 ${sherryInfoOf(attr.sherry_type)!.aroma}` : ''}>🍇 {attr.sherry_type}{sherryInfoOf(attr.sherry_type) ? ` · ${sherryInfoOf(attr.sherry_type)!.sweet}` : ''}</span>}
           {attr.volume && <span className="text-[11px] text-neutral-400">{attr.volume}ml</span>}
-        </div>
-        {/* 이름 편집(별칭 개명 — 동기화에도 유지) */}
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-56 rounded-md border border-neutral-200 px-2 py-1 text-sm" placeholder="이름" />
-          <button onClick={renameSelected} disabled={busy || !editName.trim() || editName.trim() === selected} className="rounded-md bg-neutral-700 px-3 py-1 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">이름 저장</button>
-          <span className="text-[11px] text-neutral-400">이름 변경은 별칭으로 저장(시트 동기화에도 유지)</span>
         </div>
         <div className="mt-2 text-sm text-neutral-600">최저 <b className="text-neutral-900">{won(mn)}</b> · 평균 {won(avg)} · 최고 {won(mx)} <span className="text-xs text-neutral-400">({det.length}건)</span></div>
 
@@ -390,16 +371,13 @@ export default function PricesPage() {
         </div>
       </div>
 
-      {/* 병합 바(2종 이상 체크 시) */}
-      {checked.size >= 2 && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
-          <span className="text-xs font-semibold text-amber-700">{checked.size}종 선택</span>
-          <span className="text-[11px] text-amber-600">유지할 이름</span>
-          <select value={(mergeKeep && checked.has(mergeKeep)) ? mergeKeep : [...checked][0]} onChange={(e) => setMergeKeep(e.target.value)} className="max-w-[220px] rounded-md border border-amber-300 bg-white px-2 py-1 text-xs">
-            {[...checked].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <button onClick={doMerge} disabled={busy} className="rounded-md bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-40">병합</button>
-          <button onClick={() => { setChecked(new Set()); setMergeKeep('') }} className="text-[11px] text-amber-500 hover:underline">선택해제</button>
+      {/* 삭제 바(1종 이상 체크 시) */}
+      {checked.size >= 1 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-3">
+          <span className="text-xs font-semibold text-red-700">{checked.size}종 선택</span>
+          <button onClick={doDelete} disabled={busy} className="rounded-md bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40">🗑 삭제</button>
+          <button onClick={() => setChecked(new Set())} className="text-[11px] text-red-500 hover:underline">선택해제</button>
+          <span className="text-[11px] text-red-400">삭제하면 동기화해도 다시 안 나옵니다(복구 가능)</span>
         </div>
       )}
 

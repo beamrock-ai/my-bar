@@ -7,7 +7,7 @@ const DS_SHOP = '데일리샷' // 데일리샷 시세는 별도 소스(데일리
 export type PriceRow = {
   liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; sherry_type: string
   name: string; shop: string; price: number; date: string; volume: number | null; url: string; memo: string
-  id?: string; source?: 'sheet' | 'dailyshot' | 'manual' // 조회 경로에서만 채움(병합/수동가격 처리용)
+  id?: string; app_id?: number | null; source?: 'sheet' | 'dailyshot' | 'manual' // 조회 경로에서만 채움
 }
 export type CatalogItem = { name: string; liquor: string; style: string; cask: string; peat: string; peat_ppm: number | null; sherry_type: string; volume: number | null; priceMin: number | null }
 
@@ -32,32 +32,26 @@ export async function getPrices(): Promise<PriceRow[]> {
     }))
 }
 
-// webapp 조회용: DB(liquor_price + 수동가격)에서 읽고, 이름 별칭(병합/개명)을 적용.
-// (구글시트는 소스 → 동기화로만 liquor_price에 반영. 별칭·수동가격은 동기화가 안 건드림)
+// webapp 조회용: DB(liquor_price + 수동가격)에서 읽되, 숨김(삭제) 목록은 제외.
+// (구글시트/데일리샷은 소스 → 동기화로만 liquor_price에 반영. 숨김·수동가격은 동기화가 안 건드림)
 export async function getPricesFromDB(): Promise<PriceRow[]> {
   const db = createServiceClient()
-  const [{ data: base }, { data: manual }, { data: aliases }] = await Promise.all([
-    db.from('liquor_price').select('id, liquor, style, cask, peat, peat_ppm, sherry_type, name, shop, price, observed_on, volume_ml, url, memo'),
+  const [{ data: base }, { data: manual }, { data: hiddenRows }] = await Promise.all([
+    db.from('liquor_price').select('id, app_id, liquor, style, cask, peat, peat_ppm, sherry_type, name, shop, price, observed_on, volume_ml, url, memo'),
     db.from('liquor_price_manual').select('id, name, shop, price, observed_on, volume_ml, url, memo'),
-    db.from('price_alias').select('from_name, to_name'),
+    db.from('price_hidden').select('name'),
   ])
-  // 이름 별칭 전이 해석(A→B→C ⇒ A는 C로)
-  const aliasMap = new Map<string, string>((aliases ?? []).map((a) => [a.from_name as string, a.to_name as string]))
-  const resolve = (name: string) => {
-    let n = name; const seen = new Set<string>()
-    while (aliasMap.has(n) && !seen.has(n)) { seen.add(n); n = aliasMap.get(n)! }
-    return n
-  }
-  const baseRows: PriceRow[] = (base ?? []).map((r) => ({
-    id: r.id as string, source: (r.shop === DS_SHOP ? 'dailyshot' : 'sheet') as PriceRow['source'],
+  const hidden = new Set<string>((hiddenRows ?? []).map((r) => r.name as string))
+  const baseRows: PriceRow[] = (base ?? []).filter((r) => !hidden.has(r.name)).map((r) => ({
+    id: r.id as string, app_id: r.app_id ?? null, source: (r.shop === DS_SHOP ? 'dailyshot' : 'sheet') as PriceRow['source'],
     liquor: r.liquor ?? '', style: r.style ?? '', cask: normalizeCask(r.cask ?? '') ?? '', peat: r.peat ?? '', peat_ppm: r.peat_ppm ?? null, sherry_type: r.sherry_type ?? '',
-    name: resolve(r.name), shop: r.shop ?? '', price: r.price ?? 0,
+    name: r.name, shop: r.shop ?? '', price: r.price ?? 0,
     date: r.observed_on ?? '', volume: r.volume_ml ?? null, url: r.url ?? '', memo: r.memo ?? '',
   }))
-  const manualRows: PriceRow[] = (manual ?? []).map((r) => ({
-    id: r.id as string, source: 'manual' as const,
+  const manualRows: PriceRow[] = (manual ?? []).filter((r) => !hidden.has(r.name)).map((r) => ({
+    id: r.id as string, app_id: null, source: 'manual' as const,
     liquor: '', style: '', cask: '', peat: '', peat_ppm: null, sherry_type: '',
-    name: resolve(r.name), shop: r.shop ?? '', price: r.price ?? 0,
+    name: r.name, shop: r.shop ?? '', price: r.price ?? 0,
     date: r.observed_on ?? '', volume: r.volume_ml ?? null, url: r.url ?? '', memo: r.memo ?? '',
   }))
   return [...baseRows, ...manualRows]
@@ -65,8 +59,11 @@ export async function getPricesFromDB(): Promise<PriceRow[]> {
 
 // 소스(구글시트[주류시세]) → DB(liquor_price) 동기화(전체 교체, 단 데일리샷 행은 보존). 반환=적재 건수
 export async function syncPricesToDB(): Promise<number> {
-  const prices = await getPrices()
+  const all = await getPrices()
   const db = createServiceClient()
+  const { data: hiddenRows } = await db.from('price_hidden').select('name')
+  const hidden = new Set<string>((hiddenRows ?? []).map((r) => r.name as string))
+  const prices = all.filter((p) => !hidden.has(p.name)) // 숨김(삭제)된 이름은 재적재 안 함
   await db.from('liquor_price').delete().or(`shop.is.null,shop.neq.${DS_SHOP}`) // 데일리샷(별도 소스)은 남기고 나머지(널 판매점 포함)만 교체
   if (prices.length) {
     await db.from('liquor_price').insert(prices.map((p) => ({
@@ -90,32 +87,35 @@ export async function syncDailyshotToDB(): Promise<{ total: number; new: number;
   const g = (r: string[], i: number) => (i >= 0 ? (r[i] ?? '').toString().trim() : '')
   const num = (s: string) => { const n = parseInt(s.replace(/[^0-9]/g, '')); return Number.isFinite(n) && n > 0 ? n : null }
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }) // YYYY-MM-DD(KST)
-  // 한글명 기준 dedup(최저가) — 시세는 한글명이 PK
-  const cur = new Map<string, { name: string; price: number; style: string; id: string }>()
-  for (const r of rows.slice(1)) {
-    const name = g(r, iName); const price = num(g(r, iPrice))
-    if (!name || !price) continue
-    const c = cur.get(name)
-    if (!c || price < c.price) cur.set(name, { name, price, style: g(r, iSub), id: g(r, iId) })
-  }
   const db = createServiceClient()
-  // 술별 마지막 데일리샷 가격(최근 기준일자)
-  const { data: existing } = await db.from('liquor_price')
-    .select('name, price, observed_on').eq('shop', DS_SHOP).order('observed_on', { ascending: false })
-  const last = new Map<string, { price: number; date: string }>()
-  for (const r of (existing ?? []) as { name: string; price: number; observed_on: string }[]) {
-    if (!last.has(r.name)) last.set(r.name, { price: r.price, date: r.observed_on })
+  // 숨김(삭제)된 이름은 재적재 안 함
+  const { data: hiddenRows } = await db.from('price_hidden').select('name')
+  const hidden = new Set<string>((hiddenRows ?? []).map((r) => r.name as string))
+  // 품목ID(app_id) 기준 dedup(최저가) — 데일리샷 시세는 품목ID가 시계열 키
+  const cur = new Map<number, { app_id: number; name: string; price: number; style: string }>()
+  for (const r of rows.slice(1)) {
+    const appId = parseInt(g(r, iId).replace(/[^0-9]/g, '')); const name = g(r, iName); const price = num(g(r, iPrice))
+    if (!Number.isFinite(appId) || appId <= 0 || !name || !price || hidden.has(name)) continue
+    const c = cur.get(appId)
+    if (!c || price < c.price) cur.set(appId, { app_id: appId, name, price, style: g(r, iSub) })
   }
-  const toInsert: { name: string; price: number; style: string; id: string }[] = []
+  // 품목ID별 마지막 데일리샷 가격(최근 기준일자)
+  const { data: existing } = await db.from('liquor_price')
+    .select('app_id, price, observed_on').eq('shop', DS_SHOP).not('app_id', 'is', null).order('observed_on', { ascending: false })
+  const last = new Map<number, { price: number; date: string }>()
+  for (const r of (existing ?? []) as { app_id: number; price: number; observed_on: string }[]) {
+    if (!last.has(r.app_id)) last.set(r.app_id, { price: r.price, date: r.observed_on })
+  }
+  const toInsert: { app_id: number; name: string; price: number; style: string }[] = []
   let isNew = 0, changed = 0, unchanged = 0
-  for (const [name, c] of cur) {
-    const l = last.get(name)
+  for (const [appId, c] of cur) {
+    const l = last.get(appId)
     if (!l) { toInsert.push(c); isNew++; continue }
     if (l.price === c.price) { unchanged++; continue }
     changed++
     if (l.date === today) {
-      // 같은 날 재변동 → 오늘 행 갱신(날짜당 1행 유지)
-      await db.from('liquor_price').update({ price: c.price }).eq('shop', DS_SHOP).eq('name', name).eq('observed_on', today)
+      // 같은 날 재변동 → 오늘 행 갱신(품목ID당 날짜당 1행). 이름 변동도 반영.
+      await db.from('liquor_price').update({ price: c.price, name: c.name }).eq('shop', DS_SHOP).eq('app_id', appId).eq('observed_on', today)
     } else {
       toInsert.push(c) // 다른 날 → 새 날짜 행 append
     }
@@ -123,8 +123,8 @@ export async function syncDailyshotToDB(): Promise<{ total: number; new: number;
   const CHUNK = 500
   for (let i = 0; i < toInsert.length; i += CHUNK) {
     await db.from('liquor_price').insert(toInsert.slice(i, i + CHUNK).map((p) => ({
-      liquor: '위스키', style: p.style || null, name: p.name, shop: DS_SHOP, price: p.price,
-      observed_on: today, url: p.id ? `https://dailyshot.co/m/item/${p.id}` : null, memo: '데일리샷메타',
+      liquor: '위스키', style: p.style || null, name: p.name, shop: DS_SHOP, price: p.price, app_id: p.app_id,
+      observed_on: today, url: `https://dailyshot.co/m/item/${p.app_id}`, memo: '데일리샷메타',
     })))
   }
   return { total: cur.size, new: isNew, changed, unchanged }
