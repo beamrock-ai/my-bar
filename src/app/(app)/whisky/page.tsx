@@ -422,6 +422,7 @@ export default function WhiskyPage() {
                 >
                   <option value="">＋ 기록 추가…</option>
                   <option value="buy">구매완료</option>
+                  <option value="gift_buy">선물용구매</option>
                   <option value="gift">지인선물</option>
                   <option value="wish">구매희망</option>
                   <option value="friend">지인추천</option>
@@ -449,12 +450,14 @@ function InlineForm({ mode, whiskyId, busy, post }: { mode: string; whiskyId: st
   )
   const submit = () => {
     if (mode === 'buy') post('/api/purchase', { whisky_id: whiskyId, shop_name: f.shop, purchase_date: f.date, price: f.price })
+    else if (mode === 'gift_buy') post('/api/purchase', { whisky_id: whiskyId, shop_name: f.shop, purchase_date: f.date, price: f.price, form: 'gift' })
     else if (mode === 'wish') post('/api/wishlist', { whisky_id: whiskyId, memo: f.memo, shop_names: (f.shops ?? '').split(',').map(s => s.trim()).filter(Boolean) })
     else post('/api/recommendation', { whisky_id: whiskyId, kind: mode, name: f.name, reason: f.reason })
   }
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-neutral-50 p-2">
       {mode === 'buy' && <>{input('date', '구매일자', 'date')}{input('shop', '구매상점')}{input('price', '구매가격', 'number')}</>}
+      {mode === 'gift_buy' && <>{input('date', '구매일자', 'date')}{input('shop', '구매상점')}{input('price', '구매가격(선물용)', 'number')}</>}
       {mode === 'gift' && <>{input('name', '선물한 지인')}{input('reason', '메모(계기 등)')}</>}
       {mode === 'wish' && <>{input('shops', '구매가능상점(쉼표구분)')}{input('memo', '메모')}</>}
       {mode === 'friend' && <>{input('name', '지인명')}{input('reason', '추천이유')}</>}
