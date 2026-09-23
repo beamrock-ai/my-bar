@@ -41,6 +41,11 @@ export async function POST(req: Request) {
   const form = await req.formData()
   const n = String(form.get('name') ?? '').trim()
   if (!n) return NextResponse.json({ error: '위스키명을 입력하세요' }, { status: 400 })
+  // 인증 없는 공개 API 방어(1차): 스캐너·SQLi/스크립트 페이로드·과도한 길이 차단
+  const BAD_INPUT = /(\bSELECT\b|\bUNION\b|\bINSERT\b|PG_SLEEP|SLEEP\s*\(|BENCHMARK|WAITFOR|--|\/\*|;|<[^>]+>|=\s*\(\s*SELECT|['"]\s*(OR|AND)\b|\bOR\b\s+\d+\s*[=<>])/i
+  if (n.length > 80 || BAD_INPUT.test(n)) {
+    return NextResponse.json({ error: '유효하지 않은 제품명입니다' }, { status: 400 })
+  }
 
   // "없을 때만 추가"(시세→노트 추가 등): 이미 있으면 프로필 덮어쓰지 않고 그대로 반환
   if (String(form.get('ifNew') ?? '') === '1') {
@@ -55,6 +60,12 @@ export async function POST(req: Request) {
 
   // 이름(한/영) + 종류·증류소·도수 + 설명·향/맛/피니시 + 향/맛 레이더 + 평가 자동 생성
   const info = await whiskyInfo(n)
+  // LLM이 주류로 인식하지 못한 입력(확인불가/알수없음 등)은 노트 생성 거부 → 쓰레기 항목 방지
+  // (카탈로그(시세 시트)에 있는 정식 품목은 신뢰하고 통과)
+  const resolvedName = `${info.name_ko ?? ''} ${info.name_en ?? ''}`
+  if (!inCatalog && /(알\s*수\s*없|확인\s*불가|인식\s*불가|정보\s*없음|비정상|유효하지\s*않)/.test(resolvedName)) {
+    return NextResponse.json({ error: '주류명으로 인식되지 않는 입력입니다' }, { status: 422 })
+  }
   const liquorInput = String(form.get('liquor') ?? '').trim() // 주종 수동 지정
   const styleInput = String(form.get('style') ?? '').trim() // 구분 수동 지정
   // 카탈로그 선택이면 이름을 시세 PK 그대로 유지, 아니면 AI 표준명
