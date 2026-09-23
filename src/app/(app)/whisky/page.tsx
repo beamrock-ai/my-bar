@@ -8,7 +8,7 @@ const BP = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
 // 주종(최상위 분류) / 위스키 구분(세부 스타일) / 카테고리. 서버 LIQUORS·WHISKY_STYLES와 동일(SDK 번들 방지 위해 로컬 정의)
 const LIQUORS = ['위스키', '보드카', '진', '럼', '데킬라', '브랜디', '리큐르', '사케', '막걸리', '소주', '전통주', '와인', '맥주', '기타']
 const STYLES = ['싱글몰트', '블렌디드', '블렌디드몰트', '싱글그레인', '버번', '라이', '기타']
-const CATEGORIES = ['구매완료', '시음', '바이알시음', '지인선물', '구매희망', '지인추천', '전문가추천', '직접촬영']
+const CATEGORIES = ['구매완료', '시음', '바이알시음', '지인선물', '선물용구매', '구매희망', '지인추천', '전문가추천', '직접촬영']
 // 구매형태: bottle=구매(완료), 그 외=시음. 레거시(null)는 구매로 간주.
 const isBottle = (form?: string | null) => (form ?? 'bottle') === 'bottle'
 
@@ -17,7 +17,7 @@ type Stat = { whisky_id: string; purchase_count: number; price_min: number | nul
 type Purchase = { id: string; whisky_id: string; purchase_date: string; price: number | null; form?: string | null; volume_ml?: number | null; shop: { name: string } | null }
 type Wishlist = { id: string; whisky_id: string; memo: string | null }
 type WishlistShop = { wishlist_id: string; shop: { name: string } | null }
-type Reco = { id: string; whisky_id: string; reason: string | null; recommender: { name: string; kind: 'friend' | 'expert' | 'gift' | 'photo' | 'vial' } | null }
+type Reco = { id: string; whisky_id: string; reason: string | null; recommender: { name: string; kind: 'friend' | 'expert' | 'gift' | 'gift_buy' | 'photo' | 'vial' } | null }
 
 type Data = {
   whiskies: Whisky[]; stats: Stat[]; purchases: Purchase[]
@@ -125,7 +125,7 @@ export default function WhiskyPage() {
   const purchasesOf = (id: string) => data.purchases.filter(p => p.whisky_id === id)
   const wishOf = (id: string) => data.wishlists.find(w => w.whisky_id === id)
   const wishShopsOf = (wid: string) => data.wishlistShops.filter(ws => ws.wishlist_id === wid).map(ws => ws.shop?.name).filter(Boolean)
-  const recosOf = (id: string, kind: 'friend' | 'expert' | 'gift' | 'photo' | 'vial') => data.recommendations.filter(r => r.whisky_id === id && r.recommender?.kind === kind)
+  const recosOf = (id: string, kind: 'friend' | 'expert' | 'gift' | 'gift_buy' | 'photo' | 'vial') => data.recommendations.filter(r => r.whisky_id === id && r.recommender?.kind === kind)
   const dispName = (w: Whisky) => w.name_ko || w.name
   const catsOf = (id: string) => {
     const c: string[] = []
@@ -134,6 +134,7 @@ export default function WhiskyPage() {
     if (ps.some((p) => !isBottle(p.form))) c.push('시음')
     if (recosOf(id, 'vial').length) c.push('바이알시음')
     if (recosOf(id, 'gift').length) c.push('지인선물')
+    if (recosOf(id, 'gift_buy').length) c.push('선물용구매')
     if (wishOf(id)) c.push('구매희망')
     if (recosOf(id, 'friend').length) c.push('지인추천')
     if (recosOf(id, 'expert').length) c.push('전문가추천')
@@ -240,6 +241,7 @@ export default function WhiskyPage() {
             <option value="">카테고리: 미지정</option>
             <option value="buy">구매완료</option>
             <option value="gift">지인선물</option>
+            <option value="gift_buy">선물용구매</option>
             <option value="wish">구매희망</option>
             <option value="friend">지인추천</option>
             <option value="expert">전문가추천</option>
@@ -273,6 +275,10 @@ export default function WhiskyPage() {
             {cat === 'gift' && <>
               <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="선물한 지인(필수)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
               <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="메모(계기 등)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+            </>}
+            {cat === 'gift_buy' && <>
+              <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="선물 대상(필수)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+              <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="메모(계기·가격 등)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
             </>}
             {cat === 'friend' && <>
               <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="지인명(필수)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
@@ -349,6 +355,7 @@ export default function WhiskyPage() {
           const wl = wishOf(w.id)
           const buys = purchasesOf(w.id)
           const gifts = recosOf(w.id, 'gift')
+          const giftBuys = recosOf(w.id, 'gift_buy')
           const friends = recosOf(w.id, 'friend')
           const experts = recosOf(w.id, 'expert')
           const vials = recosOf(w.id, 'vial')
@@ -360,6 +367,7 @@ export default function WhiskyPage() {
           if (tasteCnt) badges.push('시음')
           if (vials.length) badges.push('바이알시음')
           if (gifts.length) badges.push('지인선물')
+          if (giftBuys.length) badges.push('선물용구매')
           if (wl) badges.push('구매희망')
           if (friends.length) badges.push('지인추천')
           if (experts.length) badges.push('전문가추천')

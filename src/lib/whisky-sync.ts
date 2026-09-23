@@ -14,7 +14,7 @@ type DB = ReturnType<typeof createServiceClient>
 const HEADER = ['주종', '한글명', '영문명', '카테고리', '구매일자', '구매상점', '구매금액', '구매횟수', '최저가(시점·상점)', '평균가', '최고가(시점·상점)', '추천인', '추천이유', '사진URL', '비고']
 const LIQUOR_COL = 0 // A열(0-based) 주종
 const CATEGORY_COL = 3 // D열(0-based, 술유형 추가로 C→D 이동)
-const CATEGORY_VALUES = ['구매완료', '시음', '바이알시음', '지인선물', '구매희망', '지인추천', '전문가추천', '직접촬영']
+const CATEGORY_VALUES = ['구매완료', '시음', '바이알시음', '지인선물', '선물용구매', '구매희망', '지인추천', '전문가추천', '직접촬영']
 // 구매형태: bottle=구매(완료), 그 외(glass/vial/miniature)=시음. 레거시(form=null)는 구매로 간주.
 const isBottle = (form: string | null | undefined) => (form ?? 'bottle') === 'bottle'
 const norm = (s?: string | null) => (s ?? '').trim().toLowerCase()
@@ -51,11 +51,12 @@ async function buildGrid(db: DB): Promise<string[][]> {
     const hasFriend = recos2.some((r) => r.recommender?.kind === 'friend')
     const hasExpert = recos2.some((r) => r.recommender?.kind === 'expert')
     const hasGift = recos2.some((r) => r.recommender?.kind === 'gift')
+    const hasGiftBuy = recos2.some((r) => r.recommender?.kind === 'gift_buy')
     const hasVial = recos2.some((r) => r.recommender?.kind === 'vial')
     const hasPhoto = recos2.some((r) => r.recommender?.kind === 'photo')
 
     // 카테고리(단일, 우선순위): 구매완료(bottle) > 시음(그 외 구매형태) > 바이알시음 > 지인선물 > 구매희망 > 지인추천 > 전문가추천 > 직접촬영
-    const category = buyCnt ? '구매완료' : tasteCnt ? '시음' : hasVial ? '바이알시음' : hasGift ? '지인선물' : wishOf(w.id) ? '구매희망' : hasFriend ? '지인추천' : hasExpert ? '전문가추천' : hasPhoto ? '직접촬영' : ''
+    const category = buyCnt ? '구매완료' : tasteCnt ? '시음' : hasVial ? '바이알시음' : hasGift ? '지인선물' : hasGiftBuy ? '선물용구매' : wishOf(w.id) ? '구매희망' : hasFriend ? '지인추천' : hasExpert ? '전문가추천' : hasPhoto ? '직접촬영' : ''
 
     // 구매(최근 1건) — 분리 컬럼
     const latest = buys[0]

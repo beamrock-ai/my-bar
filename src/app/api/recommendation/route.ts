@@ -6,7 +6,7 @@ import { pushMirrorSafe } from '@/lib/whisky-sync'
 export async function POST(req: Request) {
   const db = createServiceClient()
   const { whisky_id, kind, name, reason } = (await req.json()) as {
-    whisky_id?: string; kind?: 'friend' | 'expert' | 'gift' | 'photo' | 'vial'; name?: string; reason?: string
+    whisky_id?: string; kind?: 'friend' | 'expert' | 'gift' | 'gift_buy' | 'photo' | 'vial'; name?: string; reason?: string
   }
   const nameOptional = kind === 'photo' || kind === 'vial' // 이름 없이도 등록 가능
   if (!whisky_id || !kind || (!nameOptional && !(name ?? '').trim())) {
