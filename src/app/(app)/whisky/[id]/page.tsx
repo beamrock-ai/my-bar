@@ -30,10 +30,13 @@ type History = { id: string; entry_date: string; body: string; created_at: strin
 // 구매형태(영어 값) → 라벨·이모지
 const FORMS: { v: string; label: string; emoji: string }[] = [
   { v: 'bottle', label: 'Bottle', emoji: '🍾' },
+  { v: 'gift', label: '선물용구매', emoji: '🎁' },
   { v: 'glass', label: 'Glass', emoji: '🥃' },
   { v: 'vial', label: 'Vial', emoji: '🧪' },
   { v: 'miniature', label: 'Miniature', emoji: '🍶' },
 ]
+// 구매(자가 구매)=bottle, 선물용구매=gift → 둘 다 '구매' 성격. 시음=glass/vial/miniature.
+const isPurchaseForm = (form: string | null | undefined) => { const f = form ?? 'bottle'; return f === 'bottle' || f === 'gift' }
 const formOf = (v: string | null) => FORMS.find((f) => f.v === v) ?? FORMS[0]
 type WImage = { id: string; url: string; is_primary: boolean }
 
@@ -421,7 +424,7 @@ export default function WhiskyDetail() {
             : matchName ? <>연결된 시세 없음 — 위 <b>시세매칭</b>에서 품목을 연결하면 최저/평균/최고가가 표시됩니다.</> : <>한글명/시세매칭을 설정하면 시세 통계가 표시됩니다.</>}
         </p>
         <div className="mt-3">
-          <div className="mb-1 flex items-center gap-2"><span className="text-xs font-semibold text-amber-800">구매 기록</span><span className="text-[11px] text-neutral-400">구매 {buys.filter((b) => (b.form ?? 'bottle') === 'bottle').length}회 · 시음 {buys.filter((b) => (b.form ?? 'bottle') !== 'bottle').length}회</span></div>
+          <div className="mb-1 flex items-center gap-2"><span className="text-xs font-semibold text-amber-800">구매 기록</span><span className="text-[11px] text-neutral-400">구매 {buys.filter((b) => (b.form ?? 'bottle') === 'bottle').length}회{buys.some((b) => b.form === 'gift') ? ` · 선물 ${buys.filter((b) => b.form === 'gift').length}회` : ''} · 시음 {buys.filter((b) => !isPurchaseForm(b.form)).length}회</span></div>
           <datalist id="price-opts"><option value="free" />{opts.price.map((v) => <option key={v} value={v} />)}</datalist>
           <datalist id="volume-opts">{opts.volume.map((v) => <option key={v} value={v} />)}</datalist>
           {buys.length > 0 && <ul className="mb-1 space-y-0.5 text-xs text-neutral-600">{buys.map((pu) => {

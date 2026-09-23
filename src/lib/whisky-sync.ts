@@ -45,18 +45,18 @@ async function buildGrid(db: DB): Promise<string[][]> {
   const grid: string[][] = [HEADER]
   for (const w of whiskies.data ?? []) {
     const buys = buysOf(w.id) // 최근순
-    const buyCnt = buys.filter((p) => isBottle(p.form)).length   // 구매(bottle)
-    const tasteCnt = buys.length - buyCnt                        // 시음(그 외)
+    const buyCnt = buys.filter((p) => isBottle(p.form)).length          // 구매(bottle)
+    const giftBuyCnt = buys.filter((p) => p.form === 'gift').length     // 선물용구매(gift)
+    const tasteCnt = buys.filter((p) => p.form !== 'gift' && !isBottle(p.form)).length  // 시음(glass/vial/miniature)
     const recos2 = recosOf(w.id)
     const hasFriend = recos2.some((r) => r.recommender?.kind === 'friend')
     const hasExpert = recos2.some((r) => r.recommender?.kind === 'expert')
     const hasGift = recos2.some((r) => r.recommender?.kind === 'gift')
-    const hasGiftBuy = recos2.some((r) => r.recommender?.kind === 'gift_buy')
     const hasVial = recos2.some((r) => r.recommender?.kind === 'vial')
     const hasPhoto = recos2.some((r) => r.recommender?.kind === 'photo')
 
-    // 카테고리(단일, 우선순위): 구매완료(bottle) > 시음(그 외 구매형태) > 바이알시음 > 지인선물 > 구매희망 > 지인추천 > 전문가추천 > 직접촬영
-    const category = buyCnt ? '구매완료' : tasteCnt ? '시음' : hasVial ? '바이알시음' : hasGift ? '지인선물' : hasGiftBuy ? '선물용구매' : wishOf(w.id) ? '구매희망' : hasFriend ? '지인추천' : hasExpert ? '전문가추천' : hasPhoto ? '직접촬영' : ''
+    // 카테고리(단일, 우선순위): 구매완료(bottle) > 선물용구매(gift) > 시음(그 외 구매형태) > 바이알시음 > 지인선물 > 구매희망 > 지인추천 > 전문가추천 > 직접촬영
+    const category = buyCnt ? '구매완료' : giftBuyCnt ? '선물용구매' : tasteCnt ? '시음' : hasVial ? '바이알시음' : hasGift ? '지인선물' : wishOf(w.id) ? '구매희망' : hasFriend ? '지인추천' : hasExpert ? '전문가추천' : hasPhoto ? '직접촬영' : ''
 
     // 구매(최근 1건) — 분리 컬럼
     const latest = buys[0]

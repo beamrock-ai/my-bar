@@ -99,6 +99,7 @@ export default function WhiskyPage() {
         const today = new Date().toISOString().slice(0, 10)
         let cres: Response | null = null
         if (cat === 'buy') cres = await fetch(`${BP}/api/purchase`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whisky_id: wid, purchase_date: catForm.date || today, shop_name: catForm.shop, price: catForm.price }) })
+        else if (cat === 'gift_buy') cres = await fetch(`${BP}/api/purchase`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whisky_id: wid, purchase_date: catForm.date || today, shop_name: catForm.shop, price: catForm.price, form: 'gift' }) })
         else if (cat === 'wish') cres = await fetch(`${BP}/api/wishlist`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whisky_id: wid, memo: catForm.memo, shop_names: (catForm.shops ?? '').split(',').map(s => s.trim()).filter(Boolean) }) })
         else cres = await fetch(`${BP}/api/recommendation`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whisky_id: wid, kind: cat, name: catForm.name, reason: catForm.reason }) })
         if (cres && !cres.ok) alert('위스키는 등록됐지만 카테고리 저장 실패: ' + ((await cres.json()).error ?? ''))
@@ -131,10 +132,10 @@ export default function WhiskyPage() {
     const c: string[] = []
     const ps = purchasesOf(id)
     if (ps.some((p) => isBottle(p.form))) c.push('구매완료')
-    if (ps.some((p) => !isBottle(p.form))) c.push('시음')
+    if (ps.some((p) => p.form === 'gift')) c.push('선물용구매')
+    if (ps.some((p) => p.form !== 'gift' && !isBottle(p.form))) c.push('시음')
     if (recosOf(id, 'vial').length) c.push('바이알시음')
     if (recosOf(id, 'gift').length) c.push('지인선물')
-    if (recosOf(id, 'gift_buy').length) c.push('선물용구매')
     if (wishOf(id)) c.push('구매희망')
     if (recosOf(id, 'friend').length) c.push('지인추천')
     if (recosOf(id, 'expert').length) c.push('전문가추천')
@@ -277,8 +278,9 @@ export default function WhiskyPage() {
               <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="메모(계기 등)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
             </>}
             {cat === 'gift_buy' && <>
-              <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="선물 대상(필수)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
-              <input value={catForm.reason ?? ''} onChange={setCf('reason')} placeholder="메모(계기·가격 등)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+              <input type="date" value={catForm.date ?? ''} onChange={setCf('date')} title="구매일자(미입력 시 오늘)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+              <input value={catForm.shop ?? ''} onChange={setCf('shop')} placeholder="구매상점" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
+              <input type="number" value={catForm.price ?? ''} onChange={setCf('price')} placeholder="구매가격(선물용)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
             </>}
             {cat === 'friend' && <>
               <input value={catForm.name ?? ''} onChange={setCf('name')} placeholder="지인명(필수)" className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs" />
@@ -355,19 +357,19 @@ export default function WhiskyPage() {
           const wl = wishOf(w.id)
           const buys = purchasesOf(w.id)
           const gifts = recosOf(w.id, 'gift')
-          const giftBuys = recosOf(w.id, 'gift_buy')
           const friends = recosOf(w.id, 'friend')
           const experts = recosOf(w.id, 'expert')
           const vials = recosOf(w.id, 'vial')
           const photos = recosOf(w.id, 'photo')
           const buyCnt = buys.filter((p) => isBottle(p.form)).length
-          const tasteCnt = buys.length - buyCnt
+          const giftBuyCnt = buys.filter((p) => p.form === 'gift').length
+          const tasteCnt = buys.filter((p) => p.form !== 'gift' && !isBottle(p.form)).length
           const badges: string[] = []
           if (buyCnt) badges.push('구매완료')
+          if (giftBuyCnt) badges.push('선물용구매')
           if (tasteCnt) badges.push('시음')
           if (vials.length) badges.push('바이알시음')
           if (gifts.length) badges.push('지인선물')
-          if (giftBuys.length) badges.push('선물용구매')
           if (wl) badges.push('구매희망')
           if (friends.length) badges.push('지인추천')
           if (experts.length) badges.push('전문가추천')
