@@ -435,7 +435,6 @@ export default function WhiskyDetail() {
                   {FORMS.map((f) => <option key={f.v} value={f.v}>{f.emoji} {f.label}</option>)}
                 </select>
                 <input value={editBuy.shop} onChange={(e) => setEditBuy({ ...editBuy, shop: e.target.value })} placeholder="상점" className="w-20 rounded border border-neutral-200 px-2 py-1" />
-                <input list="volume-opts" value={editBuy.volume} onChange={(e) => setEditBuy({ ...editBuy, volume: e.target.value })} placeholder="용량ml" inputMode="numeric" className="w-16 rounded border border-neutral-200 px-2 py-1" />
                 <input list="price-opts" value={editBuy.list} onChange={(e) => setEditBuy({ ...editBuy, list: e.target.value })} placeholder="정가" inputMode="numeric" className="w-16 rounded border border-neutral-200 px-2 py-1" />
                 <input list="price-opts" value={editBuy.price} onChange={(e) => setEditBuy({ ...editBuy, price: e.target.value })} placeholder="실구매가*" inputMode="numeric" className="w-20 rounded border border-amber-200 px-2 py-1" />
                 <button onClick={saveEditBuy} disabled={adding} className="rounded bg-emerald-600 px-2 py-1 text-white hover:bg-emerald-700 disabled:opacity-50">저장</button>
@@ -453,7 +452,6 @@ export default function WhiskyDetail() {
               {FORMS.map((f) => <option key={f.v} value={f.v}>{f.emoji} {f.label}</option>)}
             </select>
             <input value={pForm.shop} onChange={(e) => setPForm({ ...pForm, shop: e.target.value })} placeholder="상점" className="w-24 rounded border border-neutral-200 px-2 py-1" />
-            <input list="volume-opts" value={pForm.volume} onChange={(e) => setPForm({ ...pForm, volume: e.target.value })} placeholder="용량ml" inputMode="numeric" className="w-20 rounded border border-neutral-200 px-2 py-1" />
             <input list="price-opts" value={pForm.list} onChange={(e) => setPForm({ ...pForm, list: e.target.value })} placeholder="정가" inputMode="numeric" className="w-20 rounded border border-neutral-200 px-2 py-1" />
             <input list="price-opts" value={pForm.price} onChange={(e) => setPForm({ ...pForm, price: e.target.value })} placeholder="실구매가*" inputMode="numeric" className="w-24 rounded border border-amber-200 px-2 py-1" />
             <button onClick={addPurchase} disabled={adding} className="rounded bg-amber-600 px-2.5 py-1 text-white hover:bg-amber-700 disabled:opacity-50">구매 추가</button>
